@@ -7,7 +7,7 @@ mod download;
 mod downloads;
 mod find_source;
 mod footer;
-mod header;
+pub(crate) mod header;
 mod home;
 mod login;
 mod master_detail;

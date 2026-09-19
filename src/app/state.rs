@@ -34,7 +34,7 @@ use crate::{
     },
     utils,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use fs2::available_space;
 use osu_downloader::filter::FilterQuery;
 use std::borrow::Cow;
@@ -507,25 +507,38 @@ impl App {
         Some(free)
     }
 
-    pub fn next_tab(&mut self) -> Option<AppCommand> {
-        // Commit a mid-edit config field before the tab (and its focus) changes.
+    /// Shared tab-switch housekeeping: commits a mid-edit config field,
+    /// closes the login split (it lives only on Config), lands on `tab` with
+    /// editing off, then runs the same post-activation probe every switch
+    /// triggers. [`next_tab`](Self::next_tab)/[`prev_tab`](Self::prev_tab)
+    /// step relative to the current tab; [`goto_tab`](Self::goto_tab) (a
+    /// header tab-strip click) jumps straight to one.
+    fn switch_to_tab(&mut self, tab: Tab) -> Option<AppCommand> {
         self.commit_field_edit();
-        // Switching tabs closes the login split (it lives only on Config).
         self.close_login();
-        let total = self.total_tabs();
-        self.active_tab = Tab::from_index((self.active_tab.to_index() + 1) % total);
+        self.active_tab = tab;
         self.editing = false;
         self.probe_on_home_activation()
     }
 
+    pub fn next_tab(&mut self) -> Option<AppCommand> {
+        let total = self.total_tabs();
+        let next = Tab::from_index((self.active_tab.to_index() + 1) % total);
+        self.switch_to_tab(next)
+    }
+
     pub fn prev_tab(&mut self) -> Option<AppCommand> {
-        self.commit_field_edit();
-        self.close_login();
         let total = self.total_tabs();
         let idx = self.active_tab.to_index();
-        self.active_tab = Tab::from_index(if idx == 0 { total - 1 } else { idx - 1 });
-        self.editing = false;
-        self.probe_on_home_activation()
+        let prev = Tab::from_index(if idx == 0 { total - 1 } else { idx - 1 });
+        self.switch_to_tab(prev)
+    }
+
+    /// Jump directly to `tab` — a header tab-strip click's effect. Same
+    /// housekeeping as [`next_tab`](Self::next_tab)/[`prev_tab`](Self::prev_tab),
+    /// just not a relative step.
+    pub fn goto_tab(&mut self, tab: Tab) -> Option<AppCommand> {
+        self.switch_to_tab(tab)
     }
 
     /// Switch to the home tab and place focus on the directory field.
@@ -2094,6 +2107,47 @@ impl App {
         let command = self.dispatch_key(key);
         self.settle_find_route();
         command
+    }
+
+    /// Handle a raw terminal mouse event, translating it into the same
+    /// [`AppCommand`] surface [`handle_key`](Self::handle_key) produces so
+    /// both input paths dispatch identically.
+    ///
+    /// Scope is deliberately narrow: a left click on the header's tab strip
+    /// jumps straight to that tab ([`any_modal_open`](Self::any_modal_open)
+    /// suppresses it — a modal must be dismissed with its own keys, not
+    /// sidestepped by a click elsewhere on screen), and the scroll wheel is a
+    /// stand-in for ↑/↓ on whatever currently holds focus. Routing the wheel
+    /// through `handle_key` (rather than a separate scroll path) means it
+    /// respects modal/browse/editing context for free — the same branch a
+    /// real arrow press would hit decides what it does. Every other mouse
+    /// event (row/button clicks, drags) is a no-op for now.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<AppCommand> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+            }
+            MouseEventKind::ScrollDown => {
+                self.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.handle_tab_strip_click(mouse.column, mouse.row)
+            }
+            _ => None,
+        }
+    }
+
+    /// A left click at terminal (`col`, `row`) that lands on the header's tab
+    /// strip jumps straight to that tab. The header always occupies row 0 of
+    /// a full-screen frame, so anything else is ignored; see
+    /// [`crate::tui::header::tab_at_column`] for the column hit-test.
+    fn handle_tab_strip_click(&mut self, col: u16, row: u16) -> Option<AppCommand> {
+        if row != 0 || self.any_modal_open() {
+            return None;
+        }
+        let tabs = self.tab_titles();
+        let index = crate::tui::header::tab_at_column(&tabs, col)?;
+        self.goto_tab(Tab::from_index(index))
     }
 
     /// Bring the loaded find results back in line with the route the criteria

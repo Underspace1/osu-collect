@@ -725,7 +725,7 @@ fn confirm_retry_modal_renders_focused_button_block() {
     );
 
     // The focused `retry` button renders as an inverse block with bg = TEXT.
-    let text_color = Color::Rgb(205, 214, 244);
+    let text_color = Color::Rgb(222, 219, 230);
     let has_inverse = buf
         .content
         .iter()
@@ -805,7 +805,7 @@ fn modal_buttons_do_not_shift_on_focus_change() {
 
     // The inverse highlight (bg = TEXT) exists in both states but in different
     // cells (it follows the focused button).
-    let text_bg = Color::Rgb(205, 214, 244);
+    let text_bg = Color::Rgb(222, 219, 230);
     let bg_cells = |b: &ratatui::buffer::Buffer| -> Vec<usize> {
         b.content
             .iter()
@@ -827,8 +827,8 @@ fn modal_buttons_do_not_shift_on_focus_change() {
 fn active_tab_has_accent_color_no_brackets_and_plain_bg() {
     let app = App::new(Config::default());
     let buf = render_buffer(&app, 80, 24);
-    let accent = Color::Rgb(67, 171, 229);
-    let bg = Color::Rgb(30, 30, 46);
+    let accent = Color::Rgb(168, 132, 255);
+    let bg = Color::Rgb(26, 25, 33);
 
     // active tab text ("get maps") must use accent (blue)
     let has_accent_g = buf
@@ -857,7 +857,7 @@ fn active_tab_has_accent_color_no_brackets_and_plain_bg() {
     );
 
     // header area (row 0) must use plain BG, not BG_RAISED
-    let raised_bg = Color::Rgb(24, 24, 37);
+    let raised_bg = Color::Rgb(21, 20, 27);
     let header_has_raised = buf
         .content
         .iter()
@@ -869,7 +869,7 @@ fn active_tab_has_accent_color_no_brackets_and_plain_bg() {
 #[test]
 fn section_titles_use_text_dim() {
     // section_header eyebrow rows render in TEXT_DIM (no bold, no orange accent).
-    let text_dim = Color::Rgb(166, 173, 200);
+    let text_dim = Color::Rgb(170, 166, 182);
 
     // home tab: COLLECTION section header
     let app = App::new(Config::default());
@@ -1437,7 +1437,7 @@ fn resolving_stage_progress_bar_renders_single_row() {
     app.downloads_tab.preview_focused = true;
 
     let buf = render_buffer(&app, 100, 24);
-    let info = Color::Rgb(116, 199, 236);
+    let info = Color::Rgb(150, 168, 214);
 
     let rows_with_info_fill: std::collections::BTreeSet<u16> = buf
         .content
@@ -1467,7 +1467,7 @@ fn rechecking_stage_uses_warning_color_on_gauge() {
     app.downloads_tab.preview_focused = true;
 
     let buf = render_buffer(&app, 100, 24);
-    let warning = Color::Rgb(249, 226, 175);
+    let warning = Color::Rgb(233, 196, 106);
 
     let has_warning_fill = buf
         .content
@@ -1875,7 +1875,7 @@ fn info_toast_renders_with_info_colored_bar() {
         .buffer()
         .content
         .iter()
-        .any(|cell| cell.symbol() == "┃" && cell.style().fg == Some(Color::Rgb(116, 199, 236)));
+        .any(|cell| cell.symbol() == "┃" && cell.style().fg == Some(Color::Rgb(150, 168, 214)));
 
     assert!(has_info_bar, "info toast must render a ┃ bar in INFO color");
 }

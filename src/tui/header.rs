@@ -108,6 +108,34 @@ pub fn render(frame: &mut Frame, params: RenderParams<'_, '_>) {
     );
 }
 
+/// Which tab index the rendered header's tab strip occupies at absolute
+/// column `col` (0-based from the header row's left edge — a full-screen
+/// frame's header always starts at column 0, so a mouse event's raw
+/// `column` is already in this frame), or `None` when `col` lands on the
+/// brand wordmark, the leading "  •  " separator, an inter-tab gap, or past
+/// the last tab.
+///
+/// Mirrors [`render`]'s layout exactly (fixed brand width, then the leader,
+/// then each title separated by three spaces) so a tab-strip click and the
+/// strip painted on screen never disagree.
+pub(crate) fn tab_at_column(tabs: &[Cow<'_, str>], col: u16) -> Option<usize> {
+    const LEADER_WIDTH: u16 = 5; // "  •  "
+    const GAP_WIDTH: u16 = 3; // "   " between tabs
+    let brand_width = BRAND.chars().count() as u16;
+    let mut cursor = brand_width.checked_add(LEADER_WIDTH)?;
+    for (index, title) in tabs.iter().enumerate() {
+        if index > 0 {
+            cursor = cursor.checked_add(GAP_WIDTH)?;
+        }
+        let width = title.chars().count() as u16;
+        if col >= cursor && col < cursor.checked_add(width)? {
+            return Some(index);
+        }
+        cursor = cursor.checked_add(width)?;
+    }
+    None
+}
+
 /// Ticks for one full breath of the client label. ~4s at the 50ms tick — slow
 /// enough to read as a gentle glow rather than a blink.
 const CLIENT_BREATH_TICKS: f32 = 80.0;
@@ -137,12 +165,13 @@ fn client_indicator(client: OsuClient, tick: u64) -> (Line<'static>, u16) {
     (Line::from(spans), width)
 }
 
-/// Each osu! client's pastel pink: stable's warm rosy pink, lazer's cooler
-/// orchid-pink, so the two labels stay distinguishable at a glance.
+/// Each osu! client's chip color, both drawn from the gray/violet identity:
+/// stable sits on a soft lavender-gray, lazer on the richer accent violet, so
+/// the two labels stay distinguishable at a glance without leaving the family.
 fn client_pink(client: OsuClient) -> Color {
     match client {
-        OsuClient::Stable => Color::Rgb(248, 150, 186),
-        OsuClient::Lazer => Color::Rgb(228, 132, 200),
+        OsuClient::Stable => Color::Rgb(196, 190, 210),
+        OsuClient::Lazer => Color::Rgb(196, 150, 255),
     }
 }
 

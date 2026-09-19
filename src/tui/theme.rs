@@ -227,49 +227,52 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Full Catppuccin Mocha truecolor (RGB) palette.
+    /// Full truecolor (RGB) palette: a neutral slate-gray surface with violet as
+    /// the sole accent family (interactive focus, brand, values) — semantic
+    /// colors (success/warning/danger/info) stay legible but desaturated so they
+    /// never compete with the violet identity.
     pub fn full() -> Self {
         Self {
-            accent: Color::Rgb(67, 171, 229),
-            accent_alt: Color::Rgb(217, 119, 87),
-            info: Color::Rgb(116, 199, 236),
-            success: Color::Rgb(166, 227, 161),
-            warning: Color::Rgb(249, 226, 175),
-            danger: Color::Rgb(243, 139, 168),
-            text: Color::Rgb(205, 214, 244),
-            text_dim: Color::Rgb(166, 173, 200),
-            text_faint: Color::Rgb(127, 132, 156),
-            line: Color::Rgb(49, 50, 68),
-            line_strong: Color::Rgb(69, 71, 90),
-            bg: Color::Rgb(30, 30, 46),
-            bg_raised: Color::Rgb(24, 24, 37),
-            bg_hover: Color::Rgb(40, 40, 56),
-            bg_sunken: Color::Rgb(17, 17, 27),
+            accent: Color::Rgb(168, 132, 255),
+            accent_alt: Color::Rgb(216, 152, 255),
+            info: Color::Rgb(150, 168, 214),
+            success: Color::Rgb(134, 214, 150),
+            warning: Color::Rgb(233, 196, 106),
+            danger: Color::Rgb(240, 128, 149),
+            text: Color::Rgb(222, 219, 230),
+            text_dim: Color::Rgb(170, 166, 182),
+            text_faint: Color::Rgb(124, 120, 138),
+            line: Color::Rgb(46, 44, 58),
+            line_strong: Color::Rgb(64, 61, 80),
+            bg: Color::Rgb(26, 25, 33),
+            bg_raised: Color::Rgb(21, 20, 27),
+            bg_hover: Color::Rgb(36, 34, 46),
+            bg_sunken: Color::Rgb(9, 8, 11),
             tier: Tier::Full,
         }
     }
 
-    /// xterm-256 compatible palette — maps every slot to the nearest indexed color.
-    ///
-    /// `bg` and `bg_raised` both collapse to xterm 235 / 234 which are close
-    /// enough; panels rely on borders (not fill) for visual separation.
+    /// xterm-256 compatible palette — every slot is the nearest indexed color to
+    /// [`Theme::full`]'s truecolor value (via the same [`nearest_xterm256`]
+    /// search this module runs at runtime), so a compatible-tier terminal gets
+    /// the closest indexed approximation of the same gray/violet identity.
     pub fn compatible() -> Self {
         Self {
-            accent: Color::Indexed(75),
-            accent_alt: Color::Indexed(173),
-            info: Color::Indexed(117),
-            success: Color::Indexed(151),
-            warning: Color::Indexed(223),
-            danger: Color::Indexed(211),
-            text: Color::Indexed(189),
+            accent: Color::Indexed(141),
+            accent_alt: Color::Indexed(177),
+            info: Color::Indexed(110),
+            success: Color::Indexed(114),
+            warning: Color::Indexed(185),
+            danger: Color::Indexed(210),
+            text: Color::Indexed(254),
             text_dim: Color::Indexed(145),
-            text_faint: Color::Indexed(102),
-            line: Color::Indexed(238),
-            line_strong: Color::Indexed(240),
-            bg: Color::Indexed(235),
-            bg_raised: Color::Indexed(234),
-            bg_hover: Color::Indexed(236),
-            bg_sunken: Color::Indexed(233),
+            text_faint: Color::Indexed(244),
+            line: Color::Indexed(236),
+            line_strong: Color::Indexed(238),
+            bg: Color::Indexed(234),
+            bg_raised: Color::Indexed(233),
+            bg_hover: Color::Indexed(235),
+            bg_sunken: Color::Indexed(232),
             tier: Tier::Compatible,
         }
     }

@@ -31,7 +31,7 @@ use crate::{
     tui::terminal::{TerminalGuard, TuiTerminal, setup_terminal, spawn_input_thread},
     tui::{apply_theme, draw},
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui_image::picker::{Picker, ProtocolType};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -676,6 +676,16 @@ fn handle_input(
             downloads,
             tasks,
         ),
+        InputEvent::Mouse(mouse) => handle_mouse_event(
+            mouse,
+            app,
+            download_tx,
+            updates_tx,
+            auth_tx,
+            update_tx,
+            downloads,
+            tasks,
+        ),
         InputEvent::Paste(text) => {
             let cmd = app.handle_paste(text);
             dispatch_command(
@@ -729,6 +739,31 @@ fn handle_key_event(
     }
 
     let cmd = app.handle_key(key);
+    dispatch_command(
+        cmd,
+        app,
+        download_tx,
+        updates_tx,
+        auth_tx,
+        update_tx,
+        downloads,
+        tasks,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_mouse_event(
+    mouse: MouseEvent,
+    app: &mut App,
+    download_tx: &mpsc::UnboundedSender<DownloadEvent>,
+    updates_tx: &mpsc::UnboundedSender<UpdatesEvent>,
+    auth_tx: &mpsc::UnboundedSender<AuthEvent>,
+    update_tx: &mpsc::UnboundedSender<UpdateEvent>,
+    downloads: &mut HashMap<DownloadId, DownloadHandle>,
+    tasks: &mut BackgroundTasks,
+) -> bool {
+    trace!(?mouse, "Handling mouse event");
+    let cmd = app.handle_mouse(mouse);
     dispatch_command(
         cmd,
         app,
@@ -1055,6 +1090,7 @@ async fn abort_and_wait_downloads(downloads: &mut HashMap<DownloadId, DownloadHa
 #[derive(Clone, Debug)]
 pub enum InputEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     /// A bracketed-paste payload to route into the focused text field.
     Paste(String),
     Resize,

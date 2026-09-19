@@ -1,8 +1,9 @@
 use crate::app::runtime::InputEvent;
 use crate::tui::bg;
 use crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event as CrosstermEvent, KeyEventKind,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event as CrosstermEvent, KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use ratatui::{DefaultTerminal, style::Color};
@@ -21,9 +22,10 @@ pub type TuiTerminal = DefaultTerminal;
 /// [`ratatui::try_init`] enables raw mode, enters the alternate screen, and
 /// installs a panic hook that restores the terminal before the default hook
 /// runs. That hook only does `disable_raw_mode` + `LeaveAlternateScreen`,
-/// though — bracketed paste, the kitty keyboard-enhancement flags, and the
-/// OSC-11 background override are seams ratatui's lifecycle doesn't manage, so
-/// they're set afterwards and need teardown of their own on every exit path.
+/// though — bracketed paste, mouse capture, the kitty keyboard-enhancement
+/// flags, and the OSC-11 background override are seams ratatui's lifecycle
+/// doesn't manage, so they're set afterwards and need teardown of their own
+/// on every exit path.
 ///
 /// Two exit paths are covered here:
 /// - **panic**: we chain a hook *on top of* ratatui's. `take_hook` grabs
@@ -53,6 +55,7 @@ pub fn setup_terminal() -> io::Result<TuiTerminal> {
     }));
 
     let _ = execute!(io::stdout(), EnableBracketedPaste);
+    let _ = execute!(io::stdout(), EnableMouseCapture);
     let _ = execute!(
         io::stdout(),
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -62,14 +65,16 @@ pub fn setup_terminal() -> io::Result<TuiTerminal> {
 }
 
 /// Reverse the extra escapes layered by [`setup_terminal`]: pop the
-/// keyboard-enhancement flags, disable bracketed paste, reset the OSC-11
-/// background. Best-effort and **idempotent** — every step is a no-op when its
-/// state was never set, so running it twice (panic hook *and* [`TerminalGuard`]
-/// drop both firing during an unwind) is harmless. Does **not** touch raw mode
-/// or the alternate screen; that stays with [`ratatui::restore`].
+/// keyboard-enhancement flags, disable bracketed paste and mouse capture,
+/// reset the OSC-11 background. Best-effort and **idempotent** — every step is
+/// a no-op when its state was never set, so running it twice (panic hook
+/// *and* [`TerminalGuard`] drop both firing during an unwind) is harmless.
+/// Does **not** touch raw mode or the alternate screen; that stays with
+/// [`ratatui::restore`].
 fn teardown_extra_escapes() {
     let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     let _ = execute!(io::stdout(), DisableBracketedPaste);
+    let _ = execute!(io::stdout(), DisableMouseCapture);
     let _ = reset_terminal_bg(&mut io::stdout());
 }
 
@@ -129,6 +134,11 @@ pub fn spawn_input_thread(tx: mpsc::UnboundedSender<InputEvent>) -> Option<threa
                         }
                         Ok(CrosstermEvent::Paste(text)) => {
                             if tx.send(InputEvent::Paste(text)).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(CrosstermEvent::Mouse(mouse)) => {
+                            if tx.send(InputEvent::Mouse(mouse)).is_err() {
                                 break;
                             }
                         }
