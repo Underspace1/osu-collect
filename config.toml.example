@@ -1,0 +1,91 @@
+# put this in ~/.config/osu-collect/config.toml (Linux/macOS)
+# or %APPDATA%\osu-collect\config.toml (Windows)
+# every key is optional — missing keys fall back to the defaults shown here
+
+[mirror]
+# built-in beatmap mirrors; enable any combination
+nerinyan = true
+osu_direct = true
+sayobot = true
+nekoha = true
+beatconnect = true
+# ranked/approved/loved coverage only — rotation backfills the rest
+osudl = true
+catboy = true
+# server-side cascade that races the other mirrors; redundant alongside them
+hinamizawa = false
+# needs a logged-in osu! account (config tab); 10–20 downloads/hour
+osu_official = false
+# a solo dev's free instance; coverage is what its backend has cached
+nzbasic = false
+
+# optional custom beatmap mirrors; each template must contain {id}
+# tried after the built-ins, in list order (legacy single `url = "..."` is still read)
+# urls = ["https://example.com/d/{id}", "https://mirror.example.net/d/{id}"]
+
+# try-order for the built-ins as host keys; empty = the default order.
+# easier edited on the config tab (shift+up/down) — unknown keys are dropped,
+# missing built-ins appended, so it can never hide a mirror
+# order = ["osu.direct", "api.nerinyan.moe"]
+
+# login credentials for the official mirror are stored in auth.json next to
+# this file, not here
+
+[download]
+# parallel downloads; defaults to your CPU core count when unset
+# values above 50 trigger a warning — 20 or less avoids rate limiting
+# concurrent = 8
+
+# include beatmap videos in downloads (uses each mirror's no-video template when false)
+video = true
+
+# .osz integrity check: "off", "magic" (ZIP header, default) or "eocd" (full footer scan)
+archive_validation = "magic"
+
+# when a new download overlaps previously failed maps:
+# "ask" (prompt, default), "yes" (always retry), "no" (skip silently)
+retry_failed_on_download = "ask"
+
+# give up on a map once it has spent this long waiting out rate-limit cooldowns,
+# instead of retrying forever; counts only time actually spent waiting
+auto_skip_rate_limited = true
+rate_limit_skip_secs = 60
+
+# before downloading, skip maps already in your osu! library (reads the selected
+# client's osu!.db / lazer realm); they still go into the generated collection.db
+skip_already_imported = true
+
+[display]
+# "full" (truecolor, default) or "compatible" (xterm-256/16-color).
+# absent picks the full palette — there is no terminal auto-detection
+theme = "full"
+# vim navigation keymap (hjkl move, gg/G top/bottom, ctrl+u/d page, i/a edit).
+# off by default; also toggleable live on the config tab.
+vim_keys = false
+# switch to the downloads tab when a download starts.
+# on by default; also toggleable live on the config tab.
+jump_to_downloads = true
+
+[logging]
+# structured logging is disabled by default, set to true to enable tracing output
+enabled = false
+
+# supported levels: error, warn, info, debug, trace
+level = "info"
+
+# console format: "compact" (default) or "pretty"
+format = "compact"
+
+# optional directory for rolled JSON log files
+# file_dir = "/home/user/.local/share/osu-collect/logs"
+
+[update]
+# check for a newer release on launch. true (default) downloads and installs it
+# automatically; false only surfaces that one is available (header indicator +
+# `u` changelog modal) so you review and apply it on demand
+auto_update = true
+
+# also consider GitHub prereleases in the update check (highest semver wins)
+prereleases = false
+
+# [recent] is managed automatically (last collection + download dir) — no need to edit it

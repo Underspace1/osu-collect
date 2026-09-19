@@ -1,0 +1,201 @@
+use super::{migrate_in_place, migrate_no_video, migrate_theme_mode, strip_obsolete_fields};
+use std::fs;
+
+fn parse(contents: &str) -> toml::Table {
+    contents.parse::<toml::Table>().unwrap()
+}
+
+#[test]
+fn strips_verify_zip_eocd_from_download_section() {
+    let mut table = parse(
+        r#"
+[download]
+concurrent = 8
+no_video = true
+verify_zip_eocd = true
+"#,
+    );
+
+    assert!(strip_obsolete_fields(&mut table));
+    let download = table["download"].as_table().unwrap();
+    assert!(!download.contains_key("verify_zip_eocd"));
+    assert_eq!(download["concurrent"].as_integer(), Some(8));
+    assert_eq!(download["no_video"].as_bool(), Some(true));
+}
+
+#[test]
+fn is_a_noop_when_no_obsolete_fields_present() {
+    let mut table = parse(
+        r#"
+[download]
+concurrent = 4
+"#,
+    );
+
+    assert!(!strip_obsolete_fields(&mut table));
+    assert_eq!(table["download"]["concurrent"].as_integer(), Some(4));
+}
+
+#[test]
+fn is_a_noop_when_download_section_missing() {
+    let mut table = parse(
+        r#"
+[mirror]
+nerinyan = true
+"#,
+    );
+
+    assert!(!strip_obsolete_fields(&mut table));
+}
+
+#[test]
+fn migrate_in_place_rewrites_only_when_dirty() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let stale = dir.path().join("stale.toml");
+    fs::write(
+        &stale,
+        "[download]\nconcurrent = 4\nverify_zip_eocd = true\n",
+    )
+    .unwrap();
+    let before = fs::metadata(&stale).unwrap().modified().ok();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    migrate_in_place(&stale);
+    let after = fs::read_to_string(&stale).unwrap();
+    assert!(!after.contains("verify_zip_eocd"));
+    let after_mtime = fs::metadata(&stale).unwrap().modified().ok();
+    assert_ne!(before, after_mtime, "stale config must be rewritten");
+
+    let clean = dir.path().join("clean.toml");
+    fs::write(&clean, "[download]\nconcurrent = 4\n").unwrap();
+    let before = fs::metadata(&clean).unwrap().modified().ok();
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    migrate_in_place(&clean);
+    let after_mtime = fs::metadata(&clean).unwrap().modified().ok();
+    assert_eq!(before, after_mtime, "clean config must not be rewritten");
+}
+
+#[test]
+fn migrate_in_place_tolerates_missing_and_malformed_files() {
+    let dir = tempfile::tempdir().unwrap();
+
+    migrate_in_place(&dir.path().join("does-not-exist.toml"));
+
+    let bad = dir.path().join("bad.toml");
+    fs::write(&bad, "this is = not = valid toml ===").unwrap();
+    let before = fs::read_to_string(&bad).unwrap();
+    migrate_in_place(&bad);
+    assert_eq!(fs::read_to_string(&bad).unwrap(), before);
+}
+
+#[test]
+fn no_video_true_becomes_video_false() {
+    let mut table = parse("[download]\nno_video = true\n");
+    assert!(migrate_no_video(&mut table));
+    let download = table["download"].as_table().unwrap();
+    assert!(
+        !download.contains_key("no_video"),
+        "no_video must be removed"
+    );
+    assert_eq!(
+        download["video"].as_bool(),
+        Some(false),
+        "no_video = true must invert to video = false"
+    );
+}
+
+#[test]
+fn no_video_false_becomes_video_true() {
+    let mut table = parse("[download]\nno_video = false\n");
+    assert!(migrate_no_video(&mut table));
+    let download = table["download"].as_table().unwrap();
+    assert!(!download.contains_key("no_video"));
+    assert_eq!(download["video"].as_bool(), Some(true));
+}
+
+#[test]
+fn no_video_migration_keeps_explicit_video_key() {
+    let mut table = parse("[download]\nno_video = true\nvideo = true\n");
+    assert!(migrate_no_video(&mut table));
+    let download = table["download"].as_table().unwrap();
+    assert!(!download.contains_key("no_video"));
+    assert_eq!(
+        download["video"].as_bool(),
+        Some(true),
+        "an explicit video key must win over the legacy no_video"
+    );
+}
+
+#[test]
+fn no_video_migration_is_noop_when_absent() {
+    let mut table = parse("[download]\nconcurrent = 4\n");
+    assert!(!migrate_no_video(&mut table));
+    assert!(!table["download"].as_table().unwrap().contains_key("video"));
+}
+
+#[test]
+fn theme_mode_renames_default_to_full() {
+    let mut table = parse("[display]\ntheme = \"default\"\n");
+    assert!(migrate_theme_mode(&mut table));
+    assert_eq!(table["display"]["theme"].as_str(), Some("full"));
+}
+
+#[test]
+fn theme_mode_renames_sixteen_to_compatible() {
+    let mut table = parse("[display]\ntheme = \"sixteen\"\n");
+    assert!(migrate_theme_mode(&mut table));
+    assert_eq!(table["display"]["theme"].as_str(), Some("compatible"));
+}
+
+#[test]
+fn theme_mode_removes_colorblind_safe() {
+    let mut table = parse("[display]\ntheme = \"colorblind-safe\"\n");
+    assert!(migrate_theme_mode(&mut table));
+    assert!(
+        !table["display"].as_table().unwrap().contains_key("theme"),
+        "colorblind-safe must be removed so the default full palette is used"
+    );
+}
+
+#[test]
+fn theme_mode_removes_auto() {
+    let mut table = parse("[display]\ntheme = \"auto\"\n");
+    assert!(migrate_theme_mode(&mut table));
+    assert!(
+        !table["display"].as_table().unwrap().contains_key("theme"),
+        "auto must be removed so the default full palette is used"
+    );
+}
+
+#[test]
+fn theme_mode_is_noop_for_already_new_value() {
+    let mut table = parse("[display]\ntheme = \"full\"\n");
+    assert!(!migrate_theme_mode(&mut table));
+    assert_eq!(table["display"]["theme"].as_str(), Some("full"));
+}
+
+#[test]
+fn theme_mode_is_noop_when_display_section_missing() {
+    let mut table = parse("[download]\nconcurrent = 4\n");
+    assert!(!migrate_theme_mode(&mut table));
+}
+
+#[test]
+fn theme_mode_is_noop_when_theme_key_missing() {
+    let mut table = parse("[display]\nsome_other = true\n");
+    assert!(!migrate_theme_mode(&mut table));
+}
+
+#[test]
+fn migrate_in_place_rewrites_theme_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "[display]\ntheme = \"sixteen\"\n").unwrap();
+    migrate_in_place(&path);
+    let contents = fs::read_to_string(&path).unwrap();
+    assert!(
+        contents.contains("compatible"),
+        "theme must be rewritten to compatible"
+    );
+    assert!(!contents.contains("sixteen"));
+}

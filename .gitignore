@@ -1,0 +1,8 @@
+/target
+.env
+/build
+.idea
+testing-db
+*.osz
+*.osz.part-*
+/tmp/

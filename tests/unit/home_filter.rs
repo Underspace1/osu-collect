@@ -1,0 +1,202 @@
+use super::*;
+use crate::app::{App, AppCommand, EnrichSink, EnrichTarget, FindStatusMsg};
+use crate::config::Config;
+use osu_downloader::filter::FilterResults;
+use std::collections::HashMap;
+
+fn app() -> App {
+    App::new(Config::default())
+}
+
+fn results(set_ids: Vec<u32>, diff_ids: Vec<u32>) -> FilterResults {
+    let size_map: HashMap<u32, u64> = set_ids.iter().map(|&id| (id, 1_000_000)).collect();
+    FilterResults {
+        ids: diff_ids,
+        set_ids,
+        size_map,
+        hashes: Vec::new(),
+    }
+}
+
+#[test]
+fn loading_sets_status() {
+    let mut app = app();
+    let follow_up = handle_home_filter_event(HomeFilterEvent::Loading, &mut app);
+    assert!(follow_up.is_none());
+    assert_eq!(app.home.find.status_msg, FindStatusMsg::Loading);
+}
+
+#[test]
+fn results_populate_descend_and_request_first_enrich_page() {
+    let mut app = app();
+    let follow_up = handle_home_filter_event(
+        HomeFilterEvent::Results {
+            results: results(vec![10, 20], vec![1, 2, 3]),
+        },
+        &mut app,
+    );
+    // The auto-fetch of the first enrichment page rides back as a command.
+    assert!(matches!(
+        follow_up,
+        Some(AppCommand::LoadEnrichment {
+            target: EnrichTarget::Find
+        })
+    ));
+    assert_eq!(
+        app.home.find.status_msg,
+        FindStatusMsg::ReadyFilter {
+            sets: 2,
+            total_bytes: 2_000_000
+        }
+    );
+    assert!(app.home.find.browse.is_browsing());
+    assert_eq!(app.home.find.browse.rows.len(), 2);
+    assert!(app.home.find.browse.rows.iter().all(|r| r.meta.is_none()));
+    assert!(app.home.find.results_current());
+    // The raw diff ids seed the DETAILS walk, not the osu-batch pager: the
+    // pager stays dry until a details page lands and derives one-per-set seeds.
+    assert!(
+        app.home.find.browse.has_more_enrichment(),
+        "`m` sees the walk"
+    );
+    assert!(
+        !app.home.find.browse.has_unpaged_enrichment(),
+        "no osu-batch page is dispatched straight off the raw ids — the only \
+         work in flight is the walk"
+    );
+}
+
+/// Part 1 of the size-fetch rework: nzbasic's per-set sizes are free and
+/// exact, so they fold into the shared cache the download-size seed reads —
+/// this is also what gives the nzbasic route its `· ~X` download-button
+/// suffix (rendered off `checked_known_bytes`) for free.
+#[test]
+fn results_fold_nzbasic_sizes_into_size_cache() {
+    let mut app = app();
+    handle_home_filter_event(
+        HomeFilterEvent::Results {
+            results: results(vec![10, 20], vec![1, 2]),
+        },
+        &mut app,
+    );
+    app.home.find.browse.set_all_selected(true);
+    // `results()` seeds 1_000_000 bytes per set.
+    assert_eq!(app.home.find.checked_known_bytes(), 2_000_000);
+    assert_eq!(
+        app.home.find.known_sizes_for(&[10, 20, 30]),
+        HashMap::from([(10, 1_000_000), (20, 1_000_000)])
+    );
+}
+
+#[test]
+fn empty_clears_rows_and_snapshot() {
+    let mut app = app();
+    handle_home_filter_event(
+        HomeFilterEvent::Results {
+            results: results(vec![10], vec![1]),
+        },
+        &mut app,
+    );
+    handle_home_filter_event(HomeFilterEvent::Empty, &mut app);
+    assert_eq!(app.home.find.status_msg, FindStatusMsg::Empty);
+    assert!(app.home.find.browse.rows.is_empty());
+    assert!(!app.home.find.results_current());
+    // `set_rows(empty)` cleared the enrichment pager along with the rows.
+    assert!(!app.home.find.browse.has_more_enrichment());
+}
+
+#[test]
+fn failure_reports_the_reason_and_stales_results() {
+    let mut app = app();
+    handle_home_filter_event(
+        HomeFilterEvent::Failed {
+            reason: "nzbasic unreachable".to_string(),
+        },
+        &mut app,
+    );
+    assert_eq!(
+        app.home.find.status_msg,
+        FindStatusMsg::Error("nzbasic unreachable".to_string())
+    );
+    assert!(!app.home.find.results_current());
+}
+
+/// Cross-routed end-to-end: a nzbasic-forcer routed the fetch — the handler
+/// records the nzbasic backend and the download follows it into
+/// `IdsRunSource::Filter` (the `filter-` subdir prefix), driven by the recorded
+/// results backend, not the form's default.
+#[test]
+fn results_record_nzbasic_backend_and_download_routes_filter() {
+    use crate::app::FindBackend;
+    use crate::download::IdsRunSource;
+    let mut app = app();
+    // A nzbasic-forcer, as the run that produced these results would have.
+    app.home.find.cycle_special(true); // → farm
+
+    handle_home_filter_event(
+        HomeFilterEvent::Results {
+            results: results(vec![10, 20], vec![1, 2]),
+        },
+        &mut app,
+    );
+    assert_eq!(app.home.find.results_backend(), Some(FindBackend::Nzbasic));
+
+    app.home.find.browse.set_all_selected(true);
+    let (_, request) = app
+        .request_find_download()
+        .expect("default config has mirrors enabled");
+    assert_eq!(request.source, IdsRunSource::Filter);
+}
+
+/// The painted hint bar for `app`: the last row of a rendered frame, at a width
+/// wide enough that nothing trims.
+fn hint_bar(app: &App) -> String {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut terminal = Terminal::new(TestBackend::new(140, 40)).expect("test backend");
+    terminal
+        .draw(|frame| crate::tui::draw(frame, app))
+        .expect("frame renders");
+    let buf = terminal.backend().buffer();
+    let y = buf.area.height - 1;
+    (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+}
+
+/// The nzbasic route descends on its own landing exactly as the osu one does,
+/// so it inherits the same hazard: a form row left descended into its own edit
+/// mode would keep the browse's hint bar and its first `esc`.
+#[test]
+fn results_landing_over_a_descended_chip_row_hand_input_to_the_browse() {
+    use crate::app::{GetMapsSource, HomeField};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = app();
+    app.home.source = GetMapsSource::Find;
+    app.config.set_login_complete(true);
+    app.home.find.toggle_advanced_filters();
+    app.home.focus = HomeField::FindExtra;
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(app.find_chip_editing(), "the row must start out descended");
+
+    handle_home_filter_event(
+        HomeFilterEvent::Results {
+            results: results(vec![10, 20], vec![1, 2, 3]),
+        },
+        &mut app,
+    );
+    assert!(app.home.find.browse.is_browsing());
+
+    let hints = hint_bar(&app);
+    for key in ["↑↓ scroll", "↵ toggle", "a all / A none", "→ preview"] {
+        assert!(hints.contains(key), "browse hint {key:?} missing: {hints}");
+    }
+    assert!(
+        !hints.contains("esc done"),
+        "the bar collapsed to the edit affordance: {hints}"
+    );
+
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(
+        !app.home.find.browse.is_browsing(),
+        "the browse needed a second esc to ascend"
+    );
+}

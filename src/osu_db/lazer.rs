@@ -1,0 +1,249 @@
+use super::{
+    BeatmapReader, LocalBeatmap, LocalBeatmapset, LocalCollection, checksum, find_installation,
+    require_db,
+};
+use crate::realm_bridge::ffi;
+use std::path::PathBuf;
+use tracing::{debug, info, warn};
+
+pub struct LazerReader {
+    path: PathBuf,
+}
+
+impl LazerReader {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn realm_path(&self) -> Result<PathBuf, String> {
+        require_db(&self.path, "client.realm")
+    }
+}
+
+impl BeatmapReader for LazerReader {
+    fn list_beatmapsets(&self) -> Result<Vec<LocalBeatmapset>, String> {
+        let db_path = self.realm_path()?;
+        let db_path_str = db_path.to_str().ok_or("Invalid path encoding")?;
+
+        let realm =
+            ffi::open_realm(db_path_str).map_err(|e| format!("Failed to open realm: {e}"))?;
+
+        let ffi_sets = realm.list_beatmapsets();
+
+        let sets = ffi_sets
+            .into_iter()
+            .map(|s| LocalBeatmapset {
+                id: s.id,
+                beatmaps: s
+                    .beatmaps
+                    .into_iter()
+                    .map(|b| LocalBeatmap {
+                        checksum: checksum::parse_hex(&b.checksum).unwrap_or_else(|| {
+                            if !b.checksum.is_empty() {
+                                warn!(hash = %b.checksum, "malformed beatmap checksum from realm");
+                            }
+                            checksum::EMPTY
+                        }),
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .collect();
+
+        Ok(sets)
+    }
+
+    fn list_collections(&self) -> Result<Vec<LocalCollection>, String> {
+        let db_path = self.realm_path()?;
+        info!(path = %db_path.display(), "Reading collections from Realm database");
+
+        let db_path_str = db_path.to_str().ok_or("Invalid path encoding")?;
+
+        let realm =
+            ffi::open_realm(db_path_str).map_err(|e| format!("Failed to open realm: {e}"))?;
+
+        debug!("Realm database opened successfully");
+
+        let ffi_collections = realm.list_collections();
+        info!(
+            count = ffi_collections.len(),
+            "Retrieved collections from Realm"
+        );
+
+        for (i, c) in ffi_collections.iter().enumerate() {
+            debug!(
+                index = i,
+                name = %c.name,
+                beatmap_count = c.beatmap_checksums.len(),
+                "Collection from Realm"
+            );
+        }
+
+        let collections = ffi_collections
+            .into_iter()
+            .map(|c| LocalCollection {
+                name: c.name,
+                beatmap_checksums: c
+                    .beatmap_checksums
+                    .into_iter()
+                    .map(|h| {
+                        checksum::parse_hex(&h).unwrap_or_else(|| {
+                            if !h.is_empty() {
+                                warn!(hash = %h, "malformed collection checksum from realm");
+                            }
+                            checksum::EMPTY
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .collect();
+
+        Ok(collections)
+    }
+
+    fn default_path() -> Option<PathBuf> {
+        find_installation(Self::candidate_paths(), "client.realm")
+    }
+}
+
+impl LazerReader {
+    fn candidate_paths() -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+
+        #[cfg(target_os = "windows")]
+        {
+            // %appdata%\osu (default user data directory)
+            if let Some(data) = dirs::data_dir() {
+                paths.push(data.join("osu"));
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // ~/.local/share/osu (default)
+            if let Some(data) = dirs::data_local_dir() {
+                paths.push(data.join("osu"));
+            }
+            // ~/.local/share/osu-lazer (alternative naming)
+            if let Some(data) = dirs::data_local_dir() {
+                paths.push(data.join("osu-lazer"));
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // ~/Library/Application Support/osu
+            if let Some(data) = dirs::data_dir() {
+                paths.push(data.join("osu"));
+            }
+        }
+
+        paths
+    }
+
+    pub fn list_all_checksums(&self) -> Result<Vec<checksum::Md5>, String> {
+        let db_path = self.realm_path()?;
+        let db_path_str = db_path.to_str().ok_or("Invalid path encoding")?;
+
+        let realm =
+            ffi::open_realm(db_path_str).map_err(|e| format!("Failed to open realm: {e}"))?;
+
+        Ok(realm
+            .list_all_checksums()
+            .into_iter()
+            .map(|h| {
+                checksum::parse_hex(&h).unwrap_or_else(|| {
+                    if !h.is_empty() {
+                        warn!(hash = %h, "malformed checksum from realm");
+                    }
+                    checksum::EMPTY
+                })
+            })
+            .collect())
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn read_all(
+        &self,
+    ) -> Result<
+        (
+            Vec<LocalCollection>,
+            Vec<LocalBeatmapset>,
+            Vec<checksum::Md5>,
+        ),
+        String,
+    > {
+        let db_path = self.realm_path()?;
+        info!(path = %db_path.display(), "Reading all data from Realm database");
+
+        let db_path_str = db_path.to_str().ok_or("Invalid path encoding")?;
+
+        let realm =
+            ffi::open_realm(db_path_str).map_err(|e| format!("Failed to open realm: {e}"))?;
+
+        debug!("Realm database opened successfully");
+
+        let ffi_collections = realm.list_collections();
+        info!(
+            count = ffi_collections.len(),
+            "Retrieved collections from Realm"
+        );
+
+        let ffi_sets = realm.list_beatmapsets();
+        let all_checksums: Vec<checksum::Md5> = realm
+            .list_all_checksums()
+            .into_iter()
+            .map(|h| {
+                checksum::parse_hex(&h).unwrap_or_else(|| {
+                    if !h.is_empty() {
+                        warn!(hash = %h, "malformed checksum from realm");
+                    }
+                    checksum::EMPTY
+                })
+            })
+            .collect();
+
+        let collections = ffi_collections
+            .into_iter()
+            .map(|c| LocalCollection {
+                name: c.name,
+                beatmap_checksums: c
+                    .beatmap_checksums
+                    .into_iter()
+                    .map(|h| {
+                        checksum::parse_hex(&h).unwrap_or_else(|| {
+                            if !h.is_empty() {
+                                warn!(hash = %h, "malformed collection checksum from realm");
+                            }
+                            checksum::EMPTY
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .collect();
+
+        let beatmapsets = ffi_sets
+            .into_iter()
+            .map(|s| LocalBeatmapset {
+                id: s.id,
+                beatmaps: s
+                    .beatmaps
+                    .into_iter()
+                    .map(|b| LocalBeatmap {
+                        checksum: checksum::parse_hex(&b.checksum).unwrap_or_else(|| {
+                            if !b.checksum.is_empty() {
+                                warn!(hash = %b.checksum, "malformed beatmap checksum from realm");
+                            }
+                            checksum::EMPTY
+                        }),
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            })
+            .collect();
+
+        Ok((collections, beatmapsets, all_checksums))
+    }
+}

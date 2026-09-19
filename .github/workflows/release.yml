@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# create-release, the build legs, and checksums all attach to the GitHub Release.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Release page exists the moment the tag lands; notes are NOT auto-generated
+  # (the release script writes them), assets attach when the builds finish.
+  create-release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate tag is semver
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '${GITHUB_REF_NAME}' is not vX.Y.Z"; exit 1
+          fi
+      - uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: false
+
+  # Each target builds on its NATIVE runner so realm-cpp (vendored C++ submodule)
+  # links against the platform's own toolchain — windows is MSVC, no cross-build.
+  build:
+    name: Build ${{ matrix.asset_name }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash  # windows-latest ships Git Bash; keeps cp + forward-slash paths uniform
+    env:
+      OSU_CLIENT_ID: ${{ secrets.OSU_CLIENT_ID }}
+      OSU_CLIENT_SECRET: ${{ secrets.OSU_CLIENT_SECRET }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            asset_name: osu-collect-linux-x64
+            ext: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset_name: osu-collect-windows-x64
+            ext: .exe
+          - target: aarch64-apple-darwin
+            os: macos-14
+            asset_name: osu-collect-macos-arm64
+            ext: ""
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install native deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential zlib1g-dev libssl-dev
+
+      - name: Install native deps (macOS)
+        if: matrix.os == 'macos-14'
+        run: brew install cmake
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare asset
+        run: cp "target/${{ matrix.target }}/release/osu-collect${{ matrix.ext }}" "${{ matrix.asset_name }}${{ matrix.ext }}"
+
+      - name: Upload binary to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ${{ matrix.asset_name }}${{ matrix.ext }}
+
+      - name: Upload artifact for checksum job
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset_name }}${{ matrix.ext }}
+          path: ${{ matrix.asset_name }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  checksums:
+    name: Checksums
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+
+      # The in-binary updater and install scripts verify against GitHub's inline
+      # per-asset `digest`, not these `.sha256`/SHA256SUMS files. The sidecars are
+      # kept for backward compatibility: binaries released BEFORE the digest switch
+      # only know how to fetch the sidecar, so dropping it here would strand them
+      # (they could no longer self-update to this release). Remove the sidecar
+      # generation + attachment once pre-digest installs are negligible.
+      - name: Generate checksums
+        run: |
+          cd release
+          for f in osu-collect-linux-x64 osu-collect-windows-x64.exe osu-collect-macos-arm64; do
+            sha256sum "$f" > "$f.sha256"
+          done
+          cat osu-collect-linux-x64.sha256 \
+              osu-collect-windows-x64.exe.sha256 \
+              osu-collect-macos-arm64.sha256 \
+            > SHA256SUMS
+
+      - name: Upload checksums to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            release/osu-collect-linux-x64.sha256
+            release/osu-collect-windows-x64.exe.sha256
+            release/osu-collect-macos-arm64.sha256
+            release/SHA256SUMS
