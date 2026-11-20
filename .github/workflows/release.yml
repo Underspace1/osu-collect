@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual release: GitHub creates the tag on the dispatched commit.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (vX.Y.Z)'
+        required: true
 
 # create-release, the build legs, and checksums all attach to the GitHub Release.
 permissions:
@@ -11,6 +17,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   # Release page exists the moment the tag lands; notes are NOT auto-generated
@@ -21,19 +28,21 @@ jobs:
     steps:
       - name: Validate tag is semver
         run: |
-          ver="${GITHUB_REF_NAME#v}"
+          ver="${RELEASE_TAG#v}"
           if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::tag '${GITHUB_REF_NAME}' is not vX.Y.Z"; exit 1
+            echo "::error::tag '${RELEASE_TAG}' is not vX.Y.Z"; exit 1
           fi
       - uses: actions/checkout@v7
       # Notes come from .github/release-notes/<tag>.md when present.
       - name: Pick release notes
         run: |
-          f=".github/release-notes/${GITHUB_REF_NAME}.md"
-          if [ -f "$f" ]; then cp "$f" notes.md; else echo "osu!collect ${GITHUB_REF_NAME}" > notes.md; fi
+          f=".github/release-notes/${RELEASE_TAG}.md"
+          if [ -f "$f" ]; then cp "$f" notes.md; else echo "osu!collect ${RELEASE_TAG}" > notes.md; fi
       - uses: softprops/action-gh-release@v3
         with:
-          name: osu!collect ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: osu!collect ${{ env.RELEASE_TAG }}
           body_path: notes.md
           generate_release_notes: false
 
@@ -95,6 +104,7 @@ jobs:
       - name: Upload binary to release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: ${{ matrix.asset_name }}${{ matrix.ext }}
 
       # Windows only: wrap the exe in an Inno Setup installer (per-user, no admin).
@@ -103,7 +113,7 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          $ver = "${{ github.ref_name }}".TrimStart('v')
+          $ver = "$env:RELEASE_TAG".TrimStart('v')
           $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
           & $iscc "/DAppVersion=$ver" "/DSourceExe=$PWD\target\${{ matrix.target }}\release\osu-collect.exe" "/DOutputDir=$PWD\dist" packaging\windows\osu-collect.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -112,6 +122,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: dist/osu-collect-setup-x64.exe
 
       - name: Upload installer artifact (Windows)
@@ -161,6 +172,7 @@ jobs:
       - name: Upload checksums to release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             release/osu-collect-linux-x64.sha256
             release/osu-collect-windows-x64.exe.sha256
