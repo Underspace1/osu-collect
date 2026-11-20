@@ -24,7 +24,7 @@ semver = "1.0.28"
 toml = "1.1.2"
 dirs = "6.0.0"
 time = { version = "0.3.53", features = ["formatting"] }
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time", "net"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "fs", "io-util", "sync", "time", "net", "signal"] }
 futures-util = { version = "0.3.32", default-features = false, features = ["alloc"] }
 osu-db = "0.3.0"
 ratatui = { version = "0.30.1", default-features = false, features = ["crossterm", "layout-cache"] }
@@ -45,6 +45,7 @@ fs2 = "0.4.3"
 smallvec = "1.15.2"
 sha2 = "0.11.0"
 unicode-width = "0.2.2"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 
 # Suppress link-cplusplus's unconditional `-lstdc++`; build.rs owns C++ runtime linking
 # so Windows mingw builds can statically pull libstdc++.a instead of libstdc++-6.dll.

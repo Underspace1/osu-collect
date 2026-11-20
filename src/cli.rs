@@ -23,6 +23,7 @@ pub struct UpdateCollectionsArgs {
 #[derive(Debug)]
 pub enum CliCommand {
     UpdateCollections(UpdateCollectionsArgs),
+    Web(crate::web::WebArgs),
 }
 
 /// Parse CLI arguments. Returns `None` when no subcommand is given (TUI mode).
@@ -38,6 +39,7 @@ pub fn parse_args() -> Result<Option<CliCommand>, String> {
             let cmd = parse_update_collections(&args[1..])?;
             Ok(Some(CliCommand::UpdateCollections(cmd)))
         }
+        "web" => Ok(Some(CliCommand::Web(parse_web(&args[1..])?))),
         "--help" | "-h" => {
             print_help();
             std::process::exit(0);
@@ -81,6 +83,24 @@ fn parse_update_collections(args: &[String]) -> Result<UpdateCollectionsArgs, St
     })
 }
 
+fn parse_web(args: &[String]) -> Result<crate::web::WebArgs, String> {
+    let mut web = crate::web::WebArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--port" => {
+                i += 1;
+                let raw = args.get(i).ok_or("--port requires a number")?;
+                web.port = raw.parse().map_err(|_| format!("invalid port: {raw}"))?;
+            }
+            "--no-open" => web.open_browser = false,
+            other => return Err(format!("unknown argument: {other}")),
+        }
+        i += 1;
+    }
+    Ok(web)
+}
+
 fn print_help() {
     println!(concat!(
         "osu-collect ",
@@ -88,7 +108,11 @@ fn print_help() {
         "\n\n",
         "usage:\n",
         "  osu-collect                          launch TUI\n",
+        "  osu-collect web [opts]               launch the web interface in your browser\n",
         "  osu-collect update-collections [opts] check and report missing beatmaps\n\n",
+        "web options:\n",
+        "  --port <n>     port to listen on (default 7270)\n",
+        "  --no-open      don't open the browser automatically\n\n",
         "update-collections options:\n",
         "  --db <path>    override osu! database path\n",
         "  --stable       use osu! stable database (default)\n",

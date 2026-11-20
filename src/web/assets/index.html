@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="osu-collect-token" content="__SESSION_TOKEN__">
+  <title>osu!collect</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try {
+      const p = JSON.parse(localStorage.getItem('oc.prefs') || '{}');
+      const mode = p.theme || 'dark';
+      const dark = mode === 'system' ? matchMedia('(prefers-color-scheme: dark)').matches : mode !== 'light';
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      if (p.accent) document.documentElement.dataset.accent = p.accent;
+      if (p.density) document.documentElement.dataset.density = p.density;
+    } catch (_) {}
+  </script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="#/download">
+        <img src="/logo.svg" alt="" width="30" height="30">
+        <span>osu!<b>collect</b></span>
+      </a>
+      <nav class="nav" id="nav"></nav>
+      <div class="sidebar-foot">
+        <div class="conn" id="conn"><span class="dot"></span><span id="conn-label"></span></div>
+        <div class="version" id="version"></div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title"></h1>
+          <p id="page-sub" class="muted"></p>
+        </div>
+        <div class="topbar-actions" id="topbar-actions"></div>
+      </header>
+      <section id="view" class="view"></section>
+    </main>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

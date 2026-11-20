@@ -52,6 +52,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
+        Some(cli::CliCommand::Web(args)) => {
+            let _logging_guard = utils::init_logging(&config.logging)?;
+            cleanup_stale_artifacts();
+            osu_collect::web::run(config, args).await?;
+        }
         None => {
             // TUI mode — original behavior
             let realm_debug = config.logging.enabled

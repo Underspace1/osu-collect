@@ -11,5 +11,6 @@ pub mod realm_bridge;
 pub mod test_env;
 pub mod tui;
 pub mod utils;
+pub mod web;
 #[cfg(windows)]
 pub mod windows_init;
