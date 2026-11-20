@@ -143,6 +143,9 @@ jobs:
   checksums:
     name: Checksums
     needs: [build]
+    # Run even if one platform could not build (e.g. no macOS runner minutes),
+    # so the assets that did build still get their checksum files.
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -160,22 +163,21 @@ jobs:
       - name: Generate checksums
         run: |
           cd release
+          : > SHA256SUMS
           for f in osu-collect-linux-x64 osu-collect-windows-x64.exe osu-collect-macos-arm64 osu-collect-setup-x64.exe; do
-            sha256sum "$f" > "$f.sha256"
+            if [ -f "$f" ]; then
+              sha256sum "$f" > "$f.sha256"
+              cat "$f.sha256" >> SHA256SUMS
+            else
+              echo "::warning::$f was not built; no checksum"
+            fi
           done
-          cat osu-collect-linux-x64.sha256 \
-              osu-collect-windows-x64.exe.sha256 \
-              osu-collect-macos-arm64.sha256 \
-              osu-collect-setup-x64.exe.sha256 \
-            > SHA256SUMS
 
       - name: Upload checksums to release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          fail_on_unmatched_files: false
           files: |
-            release/osu-collect-linux-x64.sha256
-            release/osu-collect-windows-x64.exe.sha256
-            release/osu-collect-macos-arm64.sha256
-            release/osu-collect-setup-x64.exe.sha256
+            release/*.sha256
             release/SHA256SUMS
