@@ -6,7 +6,7 @@
 
 **Free osu!collector downloader, now with a web interface.**
 
-[Web interface](#web-interface) · [Features](#features) · [Getting started](#getting-started) · [Settings](#settings) · [Terminal app](#terminal-app)
+[Web interface](#web-interface) · [Faster downloads](#faster-downloads) · [Features](#features) · [Getting started](#getting-started) · [Settings](#settings) · [Terminal app](#terminal-app)
 
 </div>
 
@@ -78,6 +78,30 @@ A skin inspired by osu!lazer: deep purple translucent panels, slanted buttons, g
 - **Keep collections up to date.** Check a downloaded collection again later and download only new or missing beatmaps (terminal app). See [Updating collections](https://github.com/uwuclxdy/osu-collect/wiki/Updating-Collections).
 - **Search maps without a collection.** Filter by difficulty using the osu! API or nzbasic's community database (terminal app). See [Finding maps](https://github.com/uwuclxdy/osu-collect/wiki/Finding-Maps).
 
+## Faster downloads
+
+The download engine was reworked to get the most out of every mirror:
+
+- **Mirrors are picked by measured speed.** Each mirror's real throughput is tracked during the run, and every new map goes to the fastest mirror that isn't already busy. The old engine always started with the first mirror in your list, even when it was the slowest.
+- **Slow mirrors are dropped mid-transfer.** If a map is crawling (under ~160 KiB/s after 8 seconds and not about to finish) while another mirror is available, it restarts on a faster one. A mirror that sends nothing at all is caught within a second instead of after the 2-minute stall timeout.
+- **Instant failover.** A mirror that errors is skipped for that map right away instead of being retried three times with back-off first. A dead keep-alive connection still gets one instant retry.
+- **No blocking size probe.** When a mirror doesn't send the file size, the size lookup runs alongside the download instead of delaying its start.
+- **Fewer, larger disk writes** (1 MiB write buffer), warm connection reuse, and `TCP_NODELAY`.
+- **More parallel downloads by default:** twice your CPU core count, between 12 and 24, instead of one per core.
+
+Measured offline with the included benchmark (three local fake mirrors at 300 KiB/s, 1.5 MiB/s and 4 MiB/s, slowest listed first, 40 maps of 2 MiB):
+
+| Parallel downloads | Before | After | Speed-up |
+| --- | --- | --- | --- |
+| 8 | 29.9 s (2.7 MiB/s) | 10.3 s (7.8 MiB/s) | **2.9×** |
+| 16 | 14.5 s (5.5 MiB/s) | 9.3 s (8.7 MiB/s) | **1.6×** |
+
+Real-world gains depend on your connection and on how the mirrors behave that day. Run the benchmark yourself:
+
+```bash
+cargo run --release --manifest-path osu-downloader/Cargo.toml --example mirror_bench -- 8 40
+```
+
 ## Getting started
 
 ### Build from source
@@ -115,7 +139,7 @@ The **Settings** page writes to the same `config.toml` as the terminal app, so c
 | Section | Options |
 | --- | --- |
 | Appearance | Theme (dark / light / Lazer / system), accent colour, spacing, language, interface sounds and volume, whether to switch to Downloads when a download starts |
-| Downloads | Default folder, number of parallel downloads (automatic by default), include videos, skip maps you already have |
+| Downloads | Default folder, number of parallel downloads (automatic: 2 × CPU cores, 12 to 24), include videos, skip maps you already have |
 | Mirrors | Enable or disable each mirror, change the order (drag or arrows), add custom mirrors (`https://example.com/d/{id}`) |
 | osu! installation | stable or lazer, install folder (detected automatically) |
 | Advanced | Requeue rate-limited maps and how long to wait first, archive validation level (off / standard / strict) |

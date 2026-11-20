@@ -15,14 +15,57 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    fs::{self, OpenOptions},
-    io::AsyncWriteExt,
+    fs::{self, File, OpenOptions},
+    io::{AsyncWriteExt, BufWriter},
     task,
     time::timeout,
 };
 
 const MIN_PROGRESS_DELTA: u64 = 131_072;
 const MIN_PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Write buffer for the temp file. Network chunks are small (often 8-16 KiB);
+/// batching them turns thousands of tiny blocking-pool writes per archive into
+/// a handful of large ones.
+const WRITE_BUFFER: usize = 1024 * 1024;
+
+/// Slow-mirror policy applied while streaming, when the caller has other
+/// mirrors to fall back on.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SlowAbort {
+    /// Time allowed before the average speed is judged.
+    pub grace: Duration,
+    /// Average speed (bytes/s) below which the transfer is abandoned...
+    pub min_bps: f64,
+    /// ...unless it is expected to finish within this long anyway.
+    pub tolerable_remaining: Duration,
+}
+
+impl SlowAbort {
+    pub(crate) const DEFAULT: Self = Self {
+        grace: Duration::from_secs(8),
+        min_bps: 160.0 * 1024.0,
+        tolerable_remaining: Duration::from_secs(15),
+    };
+
+    /// Whether a transfer at this point should be abandoned.
+    pub(crate) fn should_abort(&self, elapsed: Duration, downloaded: u64, total: u64) -> bool {
+        if elapsed < self.grace {
+            return false;
+        }
+        let bps = downloaded as f64 / elapsed.as_secs_f64();
+        if bps >= self.min_bps {
+            return false;
+        }
+        if total > downloaded && bps > 0.0 {
+            let remaining = (total - downloaded) as f64 / bps;
+            if remaining <= self.tolerable_remaining.as_secs_f64() {
+                return false;
+            }
+        }
+        true
+    }
+}
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PID_STRING: LazyLock<String> = LazyLock::new(|| std::process::id().to_string());
@@ -37,6 +80,10 @@ pub(crate) struct DownloadStreamResult {
     pub bytes_written: u64,
     /// Temporary file path holding the completed download.
     pub temp_path: PathBuf,
+    /// The transfer was abandoned by the [`SlowAbort`] policy (temp file removed).
+    pub too_slow: bool,
+    /// Average speed of the transfer in bytes/s.
+    pub avg_bps: f64,
 }
 
 struct HashWorker {
@@ -119,14 +166,40 @@ impl Drop for TempFileGuard {
 }
 
 /// Stream a response body into a temporary download file.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn stream_download(
     response: reqwest::Response,
     output_path: &Path,
     content_length: Option<u64>,
     progress_callback: Option<Arc<dyn Fn(u64, u64) + Send + Sync>>,
     progress_timeout: Duration,
-    mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+    cancel_rx: tokio::sync::watch::Receiver<bool>,
 ) -> Result<DownloadStreamResult> {
+    let size_hint = Arc::new(AtomicU64::new(content_length.unwrap_or(0)));
+    stream_download_with(
+        response,
+        output_path,
+        &size_hint,
+        progress_callback,
+        progress_timeout,
+        cancel_rx,
+        None,
+    )
+    .await
+}
+
+/// [`stream_download`] with a live size hint (a concurrent size probe may fill
+/// it in mid-transfer; `0` = unknown) and an optional slow-mirror policy.
+pub(crate) async fn stream_download_with(
+    response: reqwest::Response,
+    output_path: &Path,
+    size_hint: &AtomicU64,
+    progress_callback: Option<Arc<dyn Fn(u64, u64) + Send + Sync>>,
+    progress_timeout: Duration,
+    mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+    slow_abort: Option<SlowAbort>,
+) -> Result<DownloadStreamResult> {
+    let started = Instant::now();
     let temp_path = temp_path_for(output_path);
     let Some(raw_file) = run_cancelable(
         OpenOptions::new()
@@ -140,15 +213,15 @@ pub(crate) async fn stream_download(
         return Ok(aborted_stream(temp_path, 0));
     };
 
-    let mut file = raw_file?;
+    let mut file = BufWriter::with_capacity(WRITE_BUFFER, raw_file?);
     let mut guard = TempFileGuard::new(temp_path.clone());
     let mut stream = response.bytes_stream();
     let mut downloaded = 0u64;
-    let total = content_length.unwrap_or(0);
     let mut hash_worker = Some(HashWorker::new());
     let mut last_progress_bytes = 0u64;
     let mut last_progress_emitted = Instant::now();
     let mut last_progress_at = Instant::now();
+    let mut last_chunk_at = Instant::now();
 
     loop {
         if *cancel_rx.borrow_and_update() {
@@ -156,8 +229,14 @@ pub(crate) async fn stream_download(
             return Ok(aborted_stream(temp_path, downloaded));
         }
 
-        let Some(maybe_chunk) =
-            run_cancelable(timeout(progress_timeout, stream.next()), &cancel_rx).await
+        // With a slow-mirror policy, wake at least every second so a mirror that
+        // sends nothing at all is judged too, not only when a chunk arrives.
+        let poll = if slow_abort.is_some() {
+            progress_timeout.min(Duration::from_secs(1))
+        } else {
+            progress_timeout
+        };
+        let Some(maybe_chunk) = run_cancelable(timeout(poll, stream.next()), &cancel_rx).await
         else {
             abort_download(&mut hash_worker, &mut file, &temp_path).await;
             return Ok(aborted_stream(temp_path, downloaded));
@@ -171,6 +250,23 @@ pub(crate) async fn stream_download(
             }
             Ok(None) => break,
             Err(_) => {
+                if let Some(policy) = slow_abort
+                    && policy.should_abort(
+                        started.elapsed(),
+                        downloaded,
+                        size_hint.load(Ordering::Relaxed),
+                    )
+                {
+                    abort_download(&mut hash_worker, &mut file, &temp_path).await;
+                    let mut result = aborted_stream(temp_path, downloaded);
+                    result.aborted = false;
+                    result.too_slow = true;
+                    result.avg_bps = downloaded as f64 / started.elapsed().as_secs_f64().max(0.001);
+                    return Ok(result);
+                }
+                if last_chunk_at.elapsed() < progress_timeout {
+                    continue;
+                }
                 abort_download(&mut hash_worker, &mut file, &temp_path).await;
                 let stalled_for = last_progress_at.elapsed().as_secs();
                 return Err(Error::network(format!(
@@ -179,6 +275,7 @@ pub(crate) async fn stream_download(
                 )));
             }
         };
+        last_chunk_at = Instant::now();
 
         downloaded += chunk.len() as u64;
 
@@ -198,6 +295,18 @@ pub(crate) async fn stream_download(
         let delta = downloaded.saturating_sub(last_progress_bytes);
         if delta >= MIN_PROGRESS_DELTA {
             last_progress_at = Instant::now();
+        }
+
+        let total = size_hint.load(Ordering::Relaxed);
+        if let Some(policy) = slow_abort
+            && policy.should_abort(started.elapsed(), downloaded, total)
+        {
+            abort_download(&mut hash_worker, &mut file, &temp_path).await;
+            let mut result = aborted_stream(temp_path, downloaded);
+            result.aborted = false;
+            result.too_slow = true;
+            result.avg_bps = downloaded as f64 / started.elapsed().as_secs_f64().max(0.001);
+            return Ok(result);
         }
 
         if let Some(ref callback) = progress_callback {
@@ -232,6 +341,8 @@ pub(crate) async fn stream_download(
         hash,
         bytes_written: downloaded,
         temp_path,
+        too_slow: false,
+        avg_bps: downloaded as f64 / started.elapsed().as_secs_f64().max(0.001),
     })
 }
 
@@ -258,11 +369,13 @@ fn aborted_stream(temp_path: PathBuf, bytes_written: u64) -> DownloadStreamResul
         hash: None,
         bytes_written,
         temp_path,
+        too_slow: false,
+        avg_bps: 0.0,
     }
 }
 
 async fn flush_download(
-    file: &mut tokio::fs::File,
+    file: &mut BufWriter<File>,
     hash_worker: &mut Option<HashWorker>,
     temp_path: &Path,
     cancel_rx: &tokio::sync::watch::Receiver<bool>,
@@ -276,7 +389,7 @@ async fn flush_download(
         return Err(Error::io(err.to_string()));
     }
 
-    let Some(sync_result) = run_cancelable(file.sync_all(), cancel_rx).await else {
+    let Some(sync_result) = run_cancelable(file.get_mut().sync_all(), cancel_rx).await else {
         abort_download(hash_worker, file, temp_path).await;
         return Err(Error::Cancelled);
     };
@@ -299,13 +412,14 @@ async fn flush_download(
 
 async fn abort_download(
     hash_worker: &mut Option<HashWorker>,
-    file: &mut tokio::fs::File,
+    file: &mut BufWriter<File>,
     temp_path: &Path,
 ) {
     if let Some(worker) = hash_worker.take() {
         worker.abort();
     }
-    let _ = file.shutdown().await;
+    // Skip flushing buffered bytes: the file is about to be deleted.
+    let _ = file.get_mut().shutdown().await;
     let _ = fs::remove_file(temp_path).await;
 }
 

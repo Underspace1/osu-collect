@@ -1,4 +1,7 @@
-use super::{MIN_PROGRESS_DELTA, TEMP_FILE_COUNTER, TempFileGuard, finalize_md5, stream_download};
+use super::{
+    MIN_PROGRESS_DELTA, SlowAbort, TEMP_FILE_COUNTER, TempFileGuard, finalize_md5, stream_download,
+    stream_download_with,
+};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -107,4 +110,73 @@ fn md5_hex_empty_input_is_known_digest() {
     );
     // well-known md5("") = d41d8cd98f00b204e9800998ecf8427e
     assert_eq!(&*hex, "d41d8cd98f00b204e9800998ecf8427e");
+}
+
+#[test]
+fn slow_abort_waits_for_the_grace_period() {
+    let p = SlowAbort::DEFAULT;
+    assert!(!p.should_abort(Duration::from_secs(2), 0, 0));
+    assert!(p.should_abort(Duration::from_secs(9), 0, 0));
+}
+
+#[test]
+fn slow_abort_keeps_fast_or_nearly_done_transfers() {
+    let p = SlowAbort::DEFAULT;
+    // 1 MiB/s average: fine.
+    assert!(!p.should_abort(Duration::from_secs(10), 10 * 1024 * 1024, 0));
+    // Slow (100 KiB/s) but only ~5 s left: let it finish.
+    assert!(!p.should_abort(Duration::from_secs(10), 1_024_000, 1_536_000));
+    // Slow with a lot left: abandon.
+    assert!(p.should_abort(Duration::from_secs(10), 1_024_000, 20_000_000));
+}
+
+#[tokio::test]
+async fn trickling_stream_is_abandoned_and_cleaned_up() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n");
+            for _ in 0..40 {
+                if stream.write_all(&[b'x'; 16]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    });
+
+    let response = reqwest::Client::new()
+        .get(format!("http://{addr}/a.osz"))
+        .send()
+        .await
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let hint = std::sync::atomic::AtomicU64::new(1_000_000);
+    let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    let policy = SlowAbort {
+        grace: Duration::from_millis(300),
+        min_bps: 100_000.0,
+        tolerable_remaining: Duration::from_secs(1),
+    };
+    let result = stream_download_with(
+        response,
+        &dir.path().join("a.osz"),
+        &hint,
+        None,
+        Duration::from_secs(10),
+        cancel_rx,
+        Some(policy),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.too_slow);
+    assert!(!result.aborted);
+    assert!(!result.temp_path.exists(), "temp file must be removed");
 }

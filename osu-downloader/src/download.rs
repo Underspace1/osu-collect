@@ -11,19 +11,46 @@ use crate::{
     mirrors::{Acquire, Mirror, MirrorKind, MirrorPool, MirrorRef},
     output_entry::parse_beatmapset_filename,
     validation::{self, ArchiveValidation},
-    worker::stream_download,
+    worker::{SlowAbort, stream_download_with},
 };
 use std::{
     collections::HashSet,
     future::{Future, pending},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
 use tracing::{debug, trace};
 
 const SIZE_PROBE_REDIRECT_LIMIT: usize = 4;
+
+/// Upper bound on the side-channel size probe. It runs concurrently with the
+/// transfer and only feeds the progress total, so it must never hold a map up.
+const SIZE_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Ends a slot's in-flight transfer count when dropped, so every exit path of an
+/// attempt (including cancellation) releases it.
+struct TransferGuard<'a> {
+    pool: &'a MirrorPool,
+    idx: usize,
+}
+
+impl<'a> TransferGuard<'a> {
+    fn new(pool: &'a MirrorPool, idx: usize) -> Self {
+        pool.begin_transfer(idx);
+        Self { pool, idx }
+    }
+}
+
+impl Drop for TransferGuard<'_> {
+    fn drop(&mut self) {
+        self.pool.end_transfer(self.idx);
+    }
+}
 
 const MIME_OSU_BEATMAP_ARCHIVE: &str = "application/x-osu-beatmap-archive";
 const MIME_OCTET_STREAM: &str = "application/octet-stream";
@@ -324,7 +351,12 @@ pub(crate) async fn download_beatmapset(
         match params.mirror_pool.acquire(&candidates) {
             Acquire::Granted(idx) => {
                 let mirror = &mirrors[idx];
-                match try_mirror_retry(mirror, idx, &params, &mut total_attempts).await {
+                // Other mirrors still worth trying for this map: lets a slow or
+                // failing mirror be abandoned right away instead of retried.
+                let alternatives = candidates.len() > 1;
+                match try_mirror_retry(mirror, idx, &params, &mut total_attempts, alternatives)
+                    .await
+                {
                     MirrorAttempt::Done(outcome) => {
                         if matches!(outcome, BeatmapsetDownloadOutcome::Success { .. }) {
                             params.mirror_pool.on_success(idx);
@@ -354,6 +386,20 @@ pub(crate) async fn download_beatmapset(
                     }
                     MirrorAttempt::Definitive(reason) => {
                         all_transient = false;
+                        last_error = Some(failed(Some(mirror.kind()), reason));
+                        candidates.retain(|&c| c != idx);
+                    }
+                    MirrorAttempt::Slow { bps } => {
+                        // Not the map's fault: treat like a transient miss so a
+                        // run of them still ends in a network retry, and move on.
+                        params.mirror_pool.penalize_slow(idx, bps);
+                        let reason = format!(
+                            "{} too slow ({:.0} KiB/s), switching mirror",
+                            mirror.kind().label(),
+                            bps / 1024.0
+                        );
+                        debug!(beatmapset_id = params.beatmapset_id, %reason);
+                        last_transient_reason = reason.clone();
                         last_error = Some(failed(Some(mirror.kind()), reason));
                         candidates.retain(|&c| c != idx);
                     }
@@ -483,9 +529,15 @@ pub(crate) async fn download_beatmapset(
 enum MirrorAttempt {
     Done(BeatmapsetDownloadOutcome),
     NotFound,
-    RateLimited { retry_after: Option<Duration> },
+    RateLimited {
+        retry_after: Option<Duration>,
+    },
     Transient(String),
     Definitive(String),
+    /// Abandoned mid-transfer by the slow-mirror policy; carries the speed seen.
+    Slow {
+        bps: f64,
+    },
 }
 
 /// Failure while handling a 2xx response's body, split so a body-level miss
@@ -496,6 +548,8 @@ enum ResponseError {
     NotFound(String),
     /// Any other definitive body or IO failure.
     Failed(String),
+    /// The transfer was abandoned for being too slow (bytes/s observed).
+    Slow(f64),
 }
 
 async fn find_existing_beatmapset(
@@ -544,6 +598,7 @@ async fn try_mirror_retry(
     idx: usize,
     params: &DownloadParams<'_>,
     total_attempts: &mut u32,
+    alternatives: bool,
 ) -> MirrorAttempt {
     let mut retry = 0u32;
 
@@ -553,10 +608,30 @@ async fn try_mirror_retry(
         }
 
         *total_attempts += 1;
-        let outcome = try_mirror_once(mirror, idx, params).await;
+        let outcome = try_mirror_once(mirror, idx, params, alternatives).await;
 
         match outcome {
-            MirrorAttempt::Transient(reason) if retry + 1 < TRANSIENT_RETRY_ATTEMPTS => {
+            // A request that died before any response is usually a pooled
+            // keep-alive connection the server had already closed: one instant
+            // retry opens a fresh one.
+            MirrorAttempt::Transient(reason)
+                if alternatives && retry == 0 && is_connection_level(&reason) =>
+            {
+                retry += 1;
+                trace!(
+                    beatmapset_id = params.beatmapset_id,
+                    mirror = mirror.kind().label(),
+                    reason = %reason,
+                    "retrying once on a fresh connection"
+                );
+            }
+            // Another mirror is available: fail over immediately rather than
+            // sleeping through backoffs on one that just errored. Same-mirror
+            // retries are kept for the last candidate standing.
+            MirrorAttempt::Transient(reason) if !alternatives => {
+                if retry + 1 >= TRANSIENT_RETRY_ATTEMPTS {
+                    return MirrorAttempt::Transient(reason);
+                }
                 retry += 1;
                 let backoff = TRANSIENT_RETRY_BASE_DELAY * (1u32 << (retry - 1));
                 trace!(
@@ -582,6 +657,11 @@ async fn try_mirror_retry(
             other => return other,
         }
     }
+}
+
+/// Transient failures raised while sending the request (no HTTP status seen).
+fn is_connection_level(reason: &str) -> bool {
+    reason.starts_with("request failed") || reason.starts_with("connection failed")
 }
 
 /// Parse a `Retry-After` header into a cooldown. Accepts both the delta-seconds
@@ -630,7 +710,10 @@ async fn try_mirror_once(
     mirror: &Mirror,
     idx: usize,
     params: &DownloadParams<'_>,
+    alternatives: bool,
 ) -> MirrorAttempt {
+    let _transfer = TransferGuard::new(params.mirror_pool, idx);
+    let started = Instant::now();
     emit_status(
         &params.callbacks,
         Status::Contacting {
@@ -759,17 +842,42 @@ async fn try_mirror_once(
         return MirrorAttempt::Definitive(format!("HTTP {status}"));
     }
 
-    let probed_size = if response.content_length().is_none() {
-        probe_download_size(mirror, params).await
-    } else {
-        None
+    // Chunked responses carry no length. The size probe only feeds the progress
+    // total and the completeness check, so it runs alongside the transfer
+    // instead of delaying it.
+    let size_hint = AtomicU64::new(response.content_length().unwrap_or(0));
+    let needs_probe = response.content_length().is_none();
+    let slow = alternatives.then_some(SlowAbort::DEFAULT);
+    let probe = async {
+        if needs_probe
+            && let Ok(Some(size)) =
+                tokio::time::timeout(SIZE_PROBE_TIMEOUT, probe_download_size(mirror, params)).await
+        {
+            size_hint.store(size, Ordering::Relaxed);
+        }
+    };
+    let process = process_mirror_response(mirror, response, params, &size_hint, slow);
+    tokio::pin!(process);
+    tokio::pin!(probe);
+    let mut probe_done = !needs_probe;
+    // Drive both; the probe is dropped as soon as the transfer settles.
+    let result = loop {
+        tokio::select! {
+            r = &mut process => break r,
+            () = &mut probe, if !probe_done => probe_done = true,
+        }
     };
 
     // Record only after the body is fully resolved: a 2xx that then fails ZIP
     // validation is a garbage response, not a success, so it must not bias the
     // tuning fit toward the mirror that served it.
-    match process_mirror_response(mirror, response, params, probed_size).await {
+    match result {
         Ok(outcome) => {
+            if let BeatmapsetDownloadOutcome::Success { size_bytes, .. } = &outcome {
+                params
+                    .mirror_pool
+                    .record_throughput(idx, *size_bytes, started.elapsed());
+            }
             #[cfg(feature = "instrument")]
             record_attempt(
                 params,
@@ -813,6 +921,19 @@ async fn try_mirror_once(
                 latency,
             );
             MirrorAttempt::Definitive(reason)
+        }
+        Err(ResponseError::Slow(bps)) => {
+            #[cfg(feature = "instrument")]
+            record_attempt(
+                params,
+                mirror,
+                idx,
+                crate::instrument::AttemptOutcome::Transient,
+                Some(status.as_u16()),
+                None,
+                latency,
+            );
+            MirrorAttempt::Slow { bps }
         }
     }
 }
@@ -877,9 +998,9 @@ async fn process_mirror_response(
     mirror: &Mirror,
     response: reqwest::Response,
     params: &DownloadParams<'_>,
-    probed_size: Option<u64>,
+    size_hint: &AtomicU64,
+    slow: Option<SlowAbort>,
 ) -> std::result::Result<BeatmapsetDownloadOutcome, ResponseError> {
-    let content_length = response.content_length().or(probed_size);
     if let Some(content_type) = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -949,7 +1070,8 @@ async fn process_mirror_response(
         params,
         output_path,
         sanitized_filename,
-        content_length,
+        size_hint,
+        slow,
     )
     .await
 }
@@ -960,15 +1082,17 @@ async fn write_archive(
     params: &DownloadParams<'_>,
     output_path: PathBuf,
     filename: String,
-    content_length: Option<u64>,
+    size_hint: &AtomicU64,
+    slow: Option<SlowAbort>,
 ) -> std::result::Result<BeatmapsetDownloadOutcome, ResponseError> {
-    let stream = stream_download(
+    let stream = stream_download_with(
         response,
         &output_path,
-        content_length,
+        size_hint,
         params.callbacks.progress.clone(),
         params.progress_timeout,
         params.cancel_rx.clone(),
+        slow,
     )
     .await
     .map_err(|err| ResponseError::Failed(err.to_string()))?;
@@ -976,6 +1100,11 @@ async fn write_archive(
     if stream.aborted {
         return Ok(BeatmapsetDownloadOutcome::Aborted);
     }
+    if stream.too_slow {
+        return Err(ResponseError::Slow(stream.avg_bps));
+    }
+    // A concurrent probe may still be pending; an unknown size skips the check.
+    let content_length = Some(size_hint.load(Ordering::Relaxed)).filter(|&n| n > 0);
 
     // Compared against the raw streamed bytes, so it must run before any
     // envelope strip shrinks the file.

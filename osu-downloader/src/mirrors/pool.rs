@@ -61,6 +61,10 @@ struct SlotState {
     /// Expiry anchor of the most recent cooldown; a fresh 429 within
     /// [`ESCALATION_WINDOW`] of this instant escalates instead of resetting.
     cooldown_expired_at: Option<Instant>,
+    /// Smoothed observed transfer speed in bytes/s; `0.0` until measured.
+    throughput: f64,
+    /// Transfers currently running against this slot.
+    inflight: u32,
 }
 
 impl SlotState {
@@ -72,8 +76,59 @@ impl SlotState {
             cooldown_until: None,
             last_cooldown: Duration::ZERO,
             cooldown_expired_at: None,
+            throughput: 0.0,
+            inflight: 0,
         }
     }
+}
+
+/// Weight of a new speed sample in the per-slot moving average.
+const THROUGHPUT_ALPHA: f64 = 0.35;
+
+/// Assumed speed of a never-measured mirror before any slot has data. Only its
+/// ratio to measured speeds matters: unmeasured slots are tried optimistically
+/// so every mirror gets sampled early in a run.
+const UNMEASURED_DEFAULT_BPS: f64 = 4.0 * 1024.0 * 1024.0;
+
+/// Order `candidates` (configured order) by expected speed for the next
+/// transfer: measured throughput shared across the transfers already running on
+/// the slot. Unmeasured slots are scored slightly above the best measured one so
+/// they get explored. The sort is stable, so with no measurements and no
+/// in-flight transfers the configured order is kept exactly.
+/// Longest spacing wait worth taking for the best-ranked mirror instead of
+/// settling for a much slower admissible one.
+const PATIENCE: Duration = Duration::from_millis(300);
+
+/// A fallback scoring below this fraction of the best candidate is "much
+/// slower": worth a short [`PATIENCE`] wait for the better mirror.
+const PATIENCE_RATIO: f64 = 0.35;
+
+fn slot_score(slots: &[SlotState], idx: usize, optimistic: f64) -> f64 {
+    slots.get(idx).map_or(0.0, |s| {
+        let est = if s.throughput > 0.0 {
+            s.throughput
+        } else {
+            optimistic
+        };
+        est / f64::from(1 + s.inflight)
+    })
+}
+
+fn optimistic_score(slots: &[SlotState]) -> f64 {
+    let best_known = slots.iter().map(|s| s.throughput).fold(0.0_f64, f64::max);
+    if best_known > 0.0 {
+        best_known * 1.15
+    } else {
+        UNMEASURED_DEFAULT_BPS
+    }
+}
+
+fn rank_candidates(slots: &[SlotState], candidates: &[usize]) -> Vec<usize> {
+    let optimistic = optimistic_score(slots);
+    let score = |idx: usize| slot_score(slots, idx, optimistic);
+    let mut ranked: Vec<usize> = candidates.to_vec();
+    ranked.sort_by(|&a, &b| score(b).total_cmp(&score(a)));
+    ranked
 }
 
 /// Admission-control scheduler over the configured mirror list.
@@ -127,8 +182,9 @@ impl MirrorPool {
         let mut slots = self.slots.lock().unwrap();
         let mut grant: Option<usize> = None;
         let mut best: Option<(Instant, bool)> = None;
+        let ranked = rank_candidates(&slots, candidates);
 
-        for &idx in candidates {
+        for &idx in &ranked {
             let Some(s) = slots.get(idx) else { continue };
             let cd_active = s.cooldown_until.filter(|&c| c > now);
             if cd_active.is_none() && s.next_free <= now {
@@ -146,6 +202,24 @@ impl MirrorPool {
         }
 
         if let Some(idx) = grant {
+            // If the top-ranked mirror is only briefly spacing-blocked and the
+            // admissible fallback is far slower, wait for the better one.
+            if let Some(&top) = ranked.first()
+                && top != idx
+                && let Some(t) = slots.get(top)
+                && t.cooldown_until.is_none_or(|c| c <= now)
+                && t.next_free > now
+                && t.next_free - now <= PATIENCE
+            {
+                let optimistic = optimistic_score(&slots);
+                let top_score = slot_score(&slots, top, optimistic);
+                if slot_score(&slots, idx, optimistic) < top_score * PATIENCE_RATIO {
+                    return Acquire::Wait {
+                        until: t.next_free,
+                        cooling: false,
+                    };
+                }
+            }
             let s = &mut slots[idx];
             s.next_free = now + s.interval;
             return Acquire::Granted(idx);
@@ -232,6 +306,62 @@ impl MirrorPool {
                 .unwrap_or(s.base_interval)
                 .max(s.base_interval);
         }
+    }
+
+    /// Mark a transfer as started on the slot at `idx`. Pair with
+    /// [`end_transfer`](Self::end_transfer).
+    pub(crate) fn begin_transfer(&self, idx: usize) {
+        if let Some(s) = self.slots.lock().unwrap().get_mut(idx) {
+            s.inflight = s.inflight.saturating_add(1);
+        }
+    }
+
+    /// Mark a transfer on the slot at `idx` as finished (whatever its outcome).
+    pub(crate) fn end_transfer(&self, idx: usize) {
+        if let Some(s) = self.slots.lock().unwrap().get_mut(idx) {
+            s.inflight = s.inflight.saturating_sub(1);
+        }
+    }
+
+    /// Fold a completed transfer's speed into the slot's moving average.
+    /// Tiny archives are dominated by latency, so they are weighted less.
+    pub(crate) fn record_throughput(&self, idx: usize, bytes: u64, elapsed: Duration) {
+        let secs = elapsed.as_secs_f64().max(0.05);
+        let sample = bytes as f64 / secs;
+        let weight = if bytes < 512 * 1024 {
+            THROUGHPUT_ALPHA / 3.0
+        } else {
+            THROUGHPUT_ALPHA
+        };
+        if let Some(s) = self.slots.lock().unwrap().get_mut(idx) {
+            s.throughput = if s.throughput > 0.0 {
+                s.throughput * (1.0 - weight) + sample * weight
+            } else {
+                sample
+            };
+        }
+    }
+
+    /// Demote a slot whose transfer was abandoned for being too slow.
+    pub(crate) fn penalize_slow(&self, idx: usize, observed_bps: f64) {
+        if let Some(s) = self.slots.lock().unwrap().get_mut(idx) {
+            let floor = observed_bps.max(1.0);
+            s.throughput = if s.throughput > 0.0 {
+                (s.throughput * 0.5).min(floor * 2.0).max(floor)
+            } else {
+                floor
+            };
+        }
+    }
+
+    /// Smoothed throughput for the slot at `idx` in bytes/s (`0.0` if unknown).
+    #[cfg(test)]
+    pub(crate) fn throughput(&self, idx: usize) -> f64 {
+        self.slots
+            .lock()
+            .unwrap()
+            .get(idx)
+            .map_or(0.0, |s| s.throughput)
     }
 
     /// Current request spacing for the slot at `idx` (base if out of range).

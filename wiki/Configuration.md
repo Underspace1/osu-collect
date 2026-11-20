@@ -32,7 +32,7 @@ Built-in mirror toggles. Hosts and what each mirror is good at: [Mirrors](Mirror
 
 | Key | Default | Notes |
 |---|---|---|
-| `concurrent` | CPU core count | Parallel downloads; values above 50 trigger a warning |
+| `concurrent` | 2 × CPU cores, between 12 and 24 | Parallel downloads; values above 50 trigger a warning |
 | `video` | `true` | Include beatmap videos; `false` uses each mirror's no-video variant where supported |
 | `archive_validation` | `"magic"` | `.osz` integrity check: `"off"`, `"magic"` (ZIP header) or `"eocd"` (full footer scan) |
 | `retry_failed_on_download` | `"ask"` | When a new download overlaps previously failed maps: `"ask"`, `"yes"` (always retry), `"no"` (skip silently) |

@@ -257,3 +257,63 @@ fn mirrors_preserves_order_and_duplicates() {
         ]
     );
 }
+
+#[test]
+fn faster_measured_mirror_is_preferred() {
+    let pool = MirrorPool::new(vec![Mirror::nerinyan(), Mirror::osu_direct()]);
+    pool.record_throughput(0, 2 * 1024 * 1024, Duration::from_secs(4)); // 512 KiB/s
+    pool.record_throughput(1, 8 * 1024 * 1024, Duration::from_secs(2)); // 4 MiB/s
+    assert_eq!(granted(pool.acquire_at(&[0, 1], Instant::now())), 1);
+}
+
+#[test]
+fn unmeasured_mirror_is_explored_before_a_measured_one() {
+    let pool = MirrorPool::new(vec![Mirror::nerinyan(), Mirror::osu_direct()]);
+    pool.record_throughput(0, 8 * 1024 * 1024, Duration::from_secs(1));
+    assert_eq!(granted(pool.acquire_at(&[0, 1], Instant::now())), 1);
+}
+
+#[test]
+fn inflight_transfers_spread_load_across_equal_mirrors() {
+    let pool = MirrorPool::new(vec![Mirror::nerinyan(), Mirror::osu_direct()]);
+    pool.record_throughput(0, 4 * 1024 * 1024, Duration::from_secs(1));
+    pool.record_throughput(1, 4 * 1024 * 1024, Duration::from_secs(1));
+    pool.begin_transfer(0);
+    pool.begin_transfer(0);
+    assert_eq!(granted(pool.acquire_at(&[0, 1], Instant::now())), 1);
+    pool.end_transfer(0);
+    pool.end_transfer(0);
+}
+
+#[test]
+fn slow_penalty_demotes_a_mirror() {
+    let pool = MirrorPool::new(vec![Mirror::nerinyan(), Mirror::osu_direct()]);
+    pool.record_throughput(0, 8 * 1024 * 1024, Duration::from_secs(1));
+    pool.record_throughput(1, 4 * 1024 * 1024, Duration::from_secs(1));
+    pool.penalize_slow(0, 20_000.0);
+    assert!(pool.throughput(0) < pool.throughput(1));
+    assert_eq!(granted(pool.acquire_at(&[0, 1], Instant::now())), 1);
+}
+
+#[test]
+fn briefly_busy_fast_mirror_is_waited_for_instead_of_a_much_slower_one() {
+    let pool = MirrorPool::new(vec![Mirror::nerinyan(), Mirror::osu_direct()]);
+    pool.record_throughput(0, 8 * 1024 * 1024, Duration::from_secs(1)); // fast
+    pool.record_throughput(1, 512 * 1024, Duration::from_secs(1)); // 16x slower
+    let now = Instant::now();
+    assert_eq!(granted(pool.acquire_at(&[0, 1], now)), 0);
+    // Fast slot's token is spent for one interval: wait rather than fall back.
+    let (until, cooling) = waited(pool.acquire_at(&[0, 1], now));
+    assert!(!cooling);
+    assert!(until > now);
+}
+
+#[test]
+fn comparable_mirror_is_used_while_the_best_one_is_busy() {
+    let pool = MirrorPool::new(vec![Mirror::nerinyan(), Mirror::osu_direct()]);
+    pool.record_throughput(0, 4 * 1024 * 1024, Duration::from_secs(1));
+    pool.record_throughput(1, 3 * 1024 * 1024, Duration::from_secs(1));
+    let now = Instant::now();
+    assert_eq!(granted(pool.acquire_at(&[0, 1], now)), 0);
+    assert_eq!(granted(pool.acquire_at(&[0, 1], now)), 1);
+}

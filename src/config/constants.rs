@@ -22,10 +22,15 @@ pub mod status {
 pub const CONCURRENT_REQUESTS: usize = 100;
 pub const DEFAULT_PROGRESS_WATCHDOG_SECS: u64 = 120;
 
+/// Automatic parallel-download count. Downloads are network-bound, not
+/// CPU-bound, so this scales with cores but never drops below a level that keeps
+/// several mirrors busy at once; the mirror scheduler's adaptive spacing and
+/// 429 cooldowns absorb the extra pressure.
 pub fn default_threads() -> u8 {
-    std::thread::available_parallelism()
-        .map(|n| (n.get() as u8).min(100))
-        .unwrap_or(1)
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    (cores * 2).clamp(12, 24) as u8
 }
 
 /// Thread counts above this warn about mirror rate-limiting risk (docs promise ">50 warns").

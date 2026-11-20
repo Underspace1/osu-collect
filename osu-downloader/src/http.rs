@@ -9,10 +9,15 @@ pub(crate) const DEFAULT_DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_sec
 pub(crate) const DEFAULT_API_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) fn create_download_client(user_agent: Option<String>) -> Result<reqwest::Client> {
+    // Keep enough warm connections for a full worker pool hitting one host, so
+    // consecutive maps reuse TCP+TLS sessions instead of re-handshaking.
     let mut builder = reqwest::Client::builder()
         .connect_timeout(DEFAULT_DOWNLOAD_CONNECT_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(5))
-        .pool_max_idle_per_host(10);
+        .pool_max_idle_per_host(64)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_nodelay(true)
+        .tcp_keepalive(Duration::from_secs(30));
 
     if let Some(ua) = user_agent {
         builder = builder.user_agent(ua);

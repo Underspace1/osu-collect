@@ -20,7 +20,7 @@ Every source shares the same download section (mirrors, directory, threads, over
 |---|---|
 | **Collection URL or ID** | Accepts `https://osucollector.com/collections/{id}` or a bare ID. Resolves as you type and remembers recent collections. *Required for the collection source.* |
 | **Download directory** | Defaults to the last used folder. <kbd>tab</kbd> completes filesystem paths during editing. |
-| **Threads** | Parallel downloads, defaulting to your CPU core count; 20 or fewer avoids rate limiting. Adjust with <kbd>+</kbd> / <kbd>-</kbd>. |
+| **Threads** | Parallel downloads, defaulting to twice your CPU core count (between 12 and 24); the mirror scheduler spreads them across mirrors and backs off on rate limits. Adjust with <kbd>+</kbd> / <kbd>-</kbd>. |
 | **Overwrite existing** | Off (default) verifies and skips maps already on disk; on skips the recheck and redownloads every map. |
 | **Video** | Includes beatmap videos (on by default); off downloads video-free where the mirror supports it. |
 

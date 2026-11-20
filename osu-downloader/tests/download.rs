@@ -290,17 +290,21 @@ async fn completion_uses_probed_size_when_download_is_chunked() {
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    let server = thread::spawn(move || {
-        for _ in 0..2 {
-            let (mut stream, _) = listener.accept().unwrap();
+    // The size probe now runs alongside the transfer and may be dropped before
+    // it connects, so the server serves however many connections arrive and is
+    // not joined.
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
             let mut request = [0u8; 2048];
-            let n = stream.read(&mut request).unwrap();
+            let Ok(n) = stream.read(&mut request) else {
+                continue;
+            };
             let request = String::from_utf8_lossy(&request[..n]);
             if request.contains("Range: bytes=0-0") {
-                stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/262144\r\nContent-Length: 1\r\n\r\nP").unwrap();
+                stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-0/262144\r\nContent-Length: 1\r\n\r\nP").ok();
             } else {
-                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=42.osz\r\nTransfer-Encoding: chunked\r\n\r\n40000\r\n").unwrap();
-                stream.write_all(&vec![b'a'; 262_144]).unwrap();
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=42.osz\r\nTransfer-Encoding: chunked\r\n\r\n40000\r\n").ok();
+                let _ = stream.write_all(&vec![b'a'; 262_144]);
                 let _ = stream.write_all(b"\r\n0\r\n\r\n");
             }
         }
@@ -332,7 +336,6 @@ async fn completion_uses_probed_size_when_download_is_chunked() {
             ..
         }
     ));
-    server.join().unwrap();
 }
 
 #[tokio::test]
