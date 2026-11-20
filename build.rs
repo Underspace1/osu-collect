@@ -139,6 +139,23 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/realm-cpp/realm-core");
 
     emit_auth_credentials();
+    embed_windows_icon();
+}
+
+/// Give the Windows executable its icon (Explorer, taskbar, Alt+Tab). Best
+/// effort: a missing resource compiler only costs the icon, never the build.
+fn embed_windows_icon() {
+    println!("cargo:rerun-if-changed=packaging/windows/osu-collect.ico");
+    #[cfg(windows)]
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("packaging/windows/osu-collect.ico");
+        res.set("ProductName", "osu!collect");
+        res.set("FileDescription", "osu!collect");
+        if let Err(err) = res.compile() {
+            println!("cargo:warning=could not embed the Windows icon: {err}");
+        }
+    }
 }
 
 fn emit_auth_credentials() {

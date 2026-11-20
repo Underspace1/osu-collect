@@ -104,6 +104,15 @@ cargo run --release --manifest-path osu-downloader/Cargo.toml --example mirror_b
 
 ## Getting started
 
+### Download
+
+Grab the latest version from the [Releases page](https://github.com/Underspace1/osu-collect/releases/latest):
+
+- **Windows:** `osu-collect-setup-x64.exe` is a regular installer. It installs for your user only (no admin rights needed), adds **osu!collect** shortcuts to the Start menu and desktop that open the web interface, can add `osu-collect` to your `PATH`, and shows up in *Settings → Apps* so you can uninstall it. A portable `osu-collect-windows-x64.exe` is attached too.
+- **Linux x64 / macOS Apple Silicon:** download the binary, make it executable (`chmod +x`) and run `./osu-collect-linux-x64 web` or `./osu-collect-macos-arm64 web`.
+
+osu!collect updates itself from this repository's releases.
+
 ### Build from source
 
 You need Rust 1.85+ (edition 2024), CMake, a C++17 compiler, and the OpenSSL and zlib development headers (on Debian/Ubuntu: `sudo apt install cmake build-essential libssl-dev zlib1g-dev`).
