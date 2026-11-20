@@ -11,7 +11,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const PREF_KEY = 'oc.prefs';
 const prefs = Object.assign(
-  { theme: 'dark', accent: 'pink', density: 'comfortable', lang: navigator.language?.startsWith('fr') ? 'fr' : 'en', jump: true },
+  { theme: 'dark', accent: 'pink', density: 'comfortable', lang: navigator.language?.startsWith('fr') ? 'fr' : 'en', jump: true, sound: true, volume: 0.5 },
   safeJSON(localStorageGet(PREF_KEY)) || {},
 );
 
@@ -25,6 +25,16 @@ function applyPrefs() {
   const root = document.documentElement;
   const dark = prefs.theme === 'system' ? matchMedia('(prefers-color-scheme: dark)').matches : prefs.theme !== 'light';
   root.dataset.theme = dark ? 'dark' : 'light';
+  if (prefs.theme === 'lazer') {
+    root.dataset.skin = 'lazer';
+    if (!document.getElementById('lazer-font')) {
+      const l = document.createElement('link');
+      l.id = 'lazer-font'; l.rel = 'stylesheet';
+      l.href = 'https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&display=swap';
+      document.head.append(l);
+    }
+  } else delete root.dataset.skin;
+  Triangles.sync();
   if (prefs.accent && prefs.accent !== 'pink') root.dataset.accent = prefs.accent; else delete root.dataset.accent;
   root.dataset.density = prefs.density;
   root.lang = prefs.lang;
@@ -61,7 +71,9 @@ const STR = {
     m_pending: 'Queued', m_downloading: 'Downloading', m_verifying: 'Verifying', m_success: 'Done', m_skipped: 'Skipped', m_failed: 'Failed', m_aborted: 'Aborted',
     set_title: 'Settings', set_sub: 'Saved to your osu!collect config file, shared with the terminal app.',
     g_appearance: 'Appearance', g_appearance_d: 'Only affects this browser.',
-    theme: 'Theme', theme_d: 'Light, dark, or follow your system.', t_dark: 'Dark', t_light: 'Light', t_system: 'System',
+    theme: 'Theme', theme_d: 'Light, dark, the osu!lazer-inspired skin, or follow your system.', t_dark: 'Dark', t_light: 'Light', t_system: 'System', t_lazer: 'Lazer',
+    sound: 'Interface sounds', sound_d: 'Short sounds when you click, toggle or finish a download.',
+    volume: 'Volume', volume_d: 'How loud interface sounds are.',
     accent: 'Accent colour', accent_d: 'Used for buttons, progress and highlights.',
     density: 'Density', density_d: 'Spacing between elements.', d_comfortable: 'Comfortable', d_compact: 'Compact',
     language: 'Language', language_d: 'Interface language.',
@@ -113,7 +125,9 @@ const STR = {
     m_pending: 'En attente', m_downloading: 'Téléchargement', m_verifying: 'Vérification', m_success: 'OK', m_skipped: 'Ignorée', m_failed: 'Échec', m_aborted: 'Annulée',
     set_title: 'Paramètres', set_sub: 'Enregistrés dans le fichier de config d’osu!collect, partagé avec l’application terminal.',
     g_appearance: 'Apparence', g_appearance_d: 'Ne concerne que ce navigateur.',
-    theme: 'Thème', theme_d: 'Clair, sombre, ou selon le système.', t_dark: 'Sombre', t_light: 'Clair', t_system: 'Système',
+    theme: 'Thème', theme_d: 'Clair, sombre, le skin inspiré d\u2019osu!lazer, ou selon le système.', t_dark: 'Sombre', t_light: 'Clair', t_system: 'Système', t_lazer: 'Lazer',
+    sound: 'Sons de l\u2019interface', sound_d: 'Petits sons au clic, aux bascules et à la fin d\u2019un téléchargement.',
+    volume: 'Volume', volume_d: 'Volume des sons de l\u2019interface.',
     accent: 'Couleur d’accent', accent_d: 'Utilisée pour les boutons, la progression et les surlignages.',
     density: 'Densité', density_d: 'Espacement entre les éléments.', d_comfortable: 'Confortable', d_compact: 'Compacte',
     language: 'Langue', language_d: 'Langue de l’interface.',
@@ -171,29 +185,11 @@ const coverList = (id) => `https://assets.ppy.sh/beatmaps/${id}/covers/list@2x.j
 /* Layer a gradient under the remote cover: if the image fails, the gradient shows. */
 const bg = (url) => `background-image:url('${url}'),linear-gradient(135deg,color-mix(in srgb,var(--accent) 30%,#24242c),#18181e)`;
 
-const ICON = {
-  download: '<path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
-  list: '<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
-  settings: '<path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09c-.66 0-1.25.4-1.51 1Z"/>',
-  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
-  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
-  folderOpen: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1M3 7v10a2 2 0 0 0 2 2h12.3a2 2 0 0 0 1.94-1.5l1.5-6A1 1 0 0 0 19.77 10H7.6a2 2 0 0 0-1.94 1.5L3 19"/>',
-  external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
-  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
-  x: '<path d="M18 6 6 18M6 6l12 12"/>',
-  trash: '<path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
-  chevron: '<path d="m9 6 6 6-6 6"/>',
-  up: '<path d="m18 15-6-6-6 6"/>',
-  down: '<path d="m6 9 6 6 6-6"/>',
-  grip: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
-  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
-  check: '<path d="M20 6 9 17l-5-5"/>',
-  alert: '<path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  home: '<path d="M3 11 12 4l9 7M5 10v10h14V10"/>',
-  arrowUp: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+/* MingCute icon set (icons.js): outline by default, filled variant on demand. */
+const icon = (name, cls = '', filled = false) => {
+  const set = MINGCUTE[name] || MINGCUTE.info;
+  return `<svg class="mc ${cls}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${filled && set.fill ? set.fill : set.line}</svg>`;
 };
-const icon = (name, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
 
 async function api(path, opts = {}) {
   const res = await fetch(`/api${path}`, {
@@ -210,8 +206,10 @@ function toast(title, body = '', kind = 'info') {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
   el.innerHTML = `${icon(kind === 'ok' ? 'check' : kind === 'bad' ? 'alert' : 'info')}<div><b>${esc(title)}</b>${body ? `<span>${esc(body)}</span>` : ''}</div>`;
+  el.insertAdjacentHTML('beforeend', '<i class="toast-timer"></i>');
   $('#toasts').append(el);
-  setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 4500);
+  Sound.play(kind === 'ok' ? 'success' : kind === 'bad' ? 'error' : 'notify');
+  setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 320); }, 4500);
 }
 
 /* ------------------------------------------------------------------ */
@@ -256,7 +254,11 @@ function render() {
   $('#page-sub').textContent = route.sub();
   $('#topbar-actions').innerHTML = '';
   renderNav(r);
-  route.render($('#view'));
+  const view = $('#view');
+  view.classList.remove('view-enter'); void view.offsetWidth; view.classList.add('view-enter');
+  S.animateNext = true;
+  route.render(view);
+  S.animateNext = false;
   document.title = `${route.title()} · osu!collect`;
 }
 
@@ -267,7 +269,7 @@ function renderNav(active = currentRoute()) {
     ['downloads', 'list', t('nav_downloads'), running],
     ['settings', 'settings', t('nav_settings')],
   ].map(([r, ic, label, count]) => `
-    <a href="#/${r}" class="${r === active ? 'active' : ''}">${icon(ic)}<span class="lbl">${esc(label)}</span>${count ? `<span class="count">${count}</span>` : ''}</a>
+    <a href="#/${r}" class="${r === active ? 'active' : ''}">${icon(ic, '', r === active)}<span class="lbl">${esc(label)}</span>${count ? `<span class="count">${count}</span>` : ''}</a>
   `).join('');
 }
 
@@ -348,7 +350,7 @@ function renderPreview() {
   const mosaic = ids.slice(0, 12).map((id) => `<div style="${bg(coverCard(id))}"></div>`).join('');
   const busy = [...S.runs.values()].some((r) => isRunning(r) && r.collection_id === c.id);
   el.innerHTML = `
-    <div class="card collection-hero">
+    <div class="card collection-hero ${S.heroAnimated === c.id ? '' : 'hero-enter'}">
       <div class="hero-banner"><div class="hero-mosaic">${mosaic}</div></div>
       <div class="hero-body">
         <div class="hero-cover" style="${bg(coverList(ids[0]))}"></div>
@@ -363,9 +365,9 @@ function renderPreview() {
       </div>
       ${c.description ? `<p class="hero-desc">${esc(c.description)}</p>` : ''}
       <div class="hero-stats">
-        <div class="stat"><b>${fmtNum(ids.length)}</b><span>${esc(t('st_sets'))}</span></div>
-        <div class="stat"><b>${fmtNum(c.beatmap_count)}</b><span>${esc(t('st_diffs'))}</span></div>
-        <div class="stat"><b>${fmtNum(c.favourites)}</b><span>${esc(t('st_favs'))}</span></div>
+        <div class="stat"><b data-count="${ids.length}">${fmtNum(ids.length)}</b><span>${esc(t('st_sets'))}</span></div>
+        <div class="stat"><b data-count="${c.beatmap_count}">${fmtNum(c.beatmap_count)}</b><span>${esc(t('st_diffs'))}</span></div>
+        <div class="stat"><b data-count="${c.favourites}">${fmtNum(c.favourites)}</b><span>${esc(t('st_favs'))}</span></div>
         <div class="stat"><b class="mono">${c.id}</b><span>${esc(t('st_id'))}</span></div>
       </div>
       <form class="dest" id="dest-form">
@@ -377,9 +379,10 @@ function renderPreview() {
     </div>
     <div class="section-title"><h2>${esc(t('beatmaps'))} <span class="faint">· ${fmtNum(ids.length)}</span></h2>
       ${S.metaFailed ? `<span class="faint" style="font-size:13px">${esc(t('meta_unavailable'))}</span>` : ''}</div>
-    <div class="maps-grid" id="maps-grid">${mapsGridHtml()}</div>
+    <div class="maps-grid stagger" id="maps-grid">${mapsGridHtml()}</div>
     ${S.shown < ids.length ? `<div class="more-row"><button class="btn" id="more-btn">${esc(t('show_more'))}</button></div>` : ''}
   `;
+  if (S.heroAnimated !== c.id) { S.heroAnimated = c.id; $$('[data-count]', el).forEach(countUp); }
   $('#dest-input').addEventListener('input', (e) => { S.dest = e.target.value; });
   $('#browse-btn').addEventListener('click', () => pickFolder(S.dest, (p) => { S.dest = p; $('#dest-input').value = p; }));
   $('#dest-form').addEventListener('submit', (e) => { e.preventDefault(); startDownload(); });
@@ -388,11 +391,11 @@ function renderPreview() {
 
 function mapsGridHtml() {
   const ids = S.collection.beatmapset_ids.slice(0, S.shown);
-  return ids.map((id) => {
+  return ids.map((id, i) => {
     const m = S.meta.get(id);
     const title = m?.title || `${t('unknown_set')} #${id}`;
     const stars = m?.diffs?.length ? Math.max(...m.diffs.map((d) => d.stars)) : null;
-    return `<div class="map-card">
+    return `<div class="map-card" style="--i:${Math.min(i, 24)}">
       <div class="cover" style="${bg(coverCard(id))}"></div>
       <div class="body">
         <div class="title" title="${esc(title)}">${esc(title)}</div>
@@ -587,7 +590,7 @@ function renderRuns(view) {
 
   // Preserve scroll position across live re-renders.
   const y = window.scrollY;
-  view.innerHTML = `<div class="runs">${runs.map(runCard).join('')}</div>`;
+  view.innerHTML = `<div class="runs ${S.animateNext ? 'stagger' : ''}">${runs.map(runCard).join('')}</div>`;
   window.scrollTo(0, y);
 
   $$('details[data-detail]', view).forEach((d) => d.addEventListener('toggle', () => {
@@ -637,16 +640,18 @@ function renderSettings(view) {
   if (!draft) draft = structuredClone(S.settings);
   const d = draft;
   const groups = [['appearance', t('g_appearance')], ['downloads', t('g_downloads')], ['mirrors', t('g_mirrors')], ['osu', t('g_osu')], ['advanced', t('g_advanced')]];
-  view.innerHTML = `<div class="settings">
+  view.innerHTML = `<div class="settings ${S.animateNext ? 'stagger' : ''}">
     <nav class="settings-nav">${groups.map(([id, l]) => `<a href="#/settings" data-jump="${id}">${esc(l)}</a>`).join('')}</nav>
     <div>
       <section class="settings-group" id="g-appearance">
         <h2>${esc(t('g_appearance'))}</h2><p>${esc(t('g_appearance_d'))}</p>
         <div class="card rows">
-          ${row(t('theme'), t('theme_d'), seg('theme', prefs.theme, [['dark', t('t_dark')], ['light', t('t_light')], ['system', t('t_system')]]))}
+          ${row(t('theme'), t('theme_d'), seg('theme', prefs.theme, [['dark', t('t_dark')], ['light', t('t_light')], ['lazer', t('t_lazer')], ['system', t('t_system')]]))}
           ${row(t('accent'), t('accent_d'), `<div class="swatches">${Object.entries(ACCENTS).map(([k, c]) => `<button type="button" class="swatch ${prefs.accent === k ? 'on' : ''}" data-accent="${k}" style="--c:${c}" title="${k}"></button>`).join('')}</div>`)}
           ${row(t('density'), t('density_d'), seg('density', prefs.density, [['comfortable', t('d_comfortable')], ['compact', t('d_compact')]]))}
           ${row(t('language'), t('language_d'), seg('lang', prefs.lang, [['en', 'English'], ['fr', 'Français']]))}
+          ${row(t('sound'), t('sound_d'), `<label class="switch"><input type="checkbox" id="pref-sound" ${prefs.sound ? 'checked' : ''}><span></span></label>`)}
+          ${row(t('volume'), t('volume_d'), `${icon(prefs.volume > 0 ? 'volume' : 'volumeOff', 'vol-ico')}<input type="range" class="range" id="pref-volume" min="0" max="1" step="0.05" value="${prefs.volume}" ${prefs.sound ? '' : 'disabled'}>`)}
           ${row(t('jump'), t('jump_d'), `<label class="switch"><input type="checkbox" id="pref-jump" ${prefs.jump ? 'checked' : ''}><span></span></label>`)}
         </div>
       </section>
@@ -731,6 +736,9 @@ function bindSettings(view) {
   }));
   $$('[data-accent]', view).forEach((b) => b.addEventListener('click', () => { prefs.accent = b.dataset.accent; savePrefs(); rerender(); }));
   $('#pref-jump').addEventListener('change', (e) => { prefs.jump = e.target.checked; savePrefs(); });
+  $('#pref-sound').addEventListener('change', (e) => { prefs.sound = e.target.checked; savePrefs(); if (prefs.sound) Sound.play('success'); rerender(); });
+  $('#pref-volume').addEventListener('input', (e) => { prefs.volume = Number(e.target.value); savePrefs(); });
+  $('#pref-volume').addEventListener('change', () => Sound.play('tick', { force: true }));
 
   $$('[data-k]', view).forEach((inp) => inp.addEventListener(inp.type === 'checkbox' ? 'change' : 'input', () => {
     const k = inp.dataset.k;
@@ -796,7 +804,9 @@ function pickFolder(start, onPick) {
   }
   function draw() {
     const l = current;
-    root.innerHTML = `<div class="modal-backdrop" id="mb"><div class="modal" role="dialog" aria-modal="true">
+    const first = !root.firstChild;
+    if (first) Sound.play('open');
+    root.innerHTML = `<div class="modal-backdrop ${first ? '' : 'no-anim'}" id="mb"><div class="modal" role="dialog" aria-modal="true">
       <div class="modal-head"><h3>${esc(t('pick_folder'))}</h3><button class="btn sm icon ghost" id="mclose">${icon('x')}</button></div>
       <div class="modal-body">
         <div class="crumb"><button class="btn sm" id="mup" ${l.parent ? '' : 'disabled'}>${icon('arrowUp')}${esc(t('up'))}</button><div class="path" title="${esc(l.path)}"><span style="unicode-bidi:plaintext">${esc(l.display)}</span></div></div>
@@ -843,6 +853,172 @@ async function syncRuns() {
     scheduleRunsRender();
   } catch (_) {}
 }
+
+/* ------------------------------------------------------------------ */
+/* Motion helpers                                                      */
+/* ------------------------------------------------------------------ */
+
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function countUp(el) {
+  const target = Number(el.dataset.count) || 0;
+  if (reducedMotion() || target < 2) return;
+  const start = performance.now(); const dur = 700;
+  const step = (now) => {
+    const k = Math.min(1, (now - start) / dur);
+    const eased = 1 - Math.pow(1 - k, 3);
+    el.textContent = fmtNum(Math.round(target * eased));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/* An osu!-style hit burst: an expanding ring from the click point. */
+function hitBurst(el, e) {
+  if (reducedMotion()) return;
+  const r = el.getBoundingClientRect();
+  const ring = document.createElement('span');
+  ring.className = 'burst';
+  const size = Math.max(r.width, r.height) * 1.4;
+  ring.style.width = ring.style.height = `${size}px`;
+  ring.style.left = `${(e.clientX || r.left + r.width / 2) - r.left - size / 2}px`;
+  ring.style.top = `${(e.clientY || r.top + r.height / 2) - r.top - size / 2}px`;
+  el.append(ring);
+  ring.addEventListener('animationend', () => ring.remove());
+}
+
+/* Global feedback: every button press gets a sound and a burst. */
+document.addEventListener('pointerdown', (e) => {
+  const el = e.target.closest('.btn, .nav a, .segmented button, .swatch, .dir-list button, .search-hint button, .settings-nav a');
+  if (!el || el.disabled) return;
+  if (el.matches('.btn')) hitBurst(el, e);
+  Sound.play(el.matches('.btn.primary') ? 'confirm' : el.matches('.nav a') ? 'nav' : 'tick');
+});
+document.addEventListener('change', (e) => {
+  if (e.target.matches('.switch input')) Sound.play(e.target.checked ? 'on' : 'off');
+});
+document.addEventListener('pointerover', (e) => {
+  const el = e.target.closest('.nav a, .map-card, .btn');
+  if (!el || el.contains(e.relatedTarget)) return;
+  Sound.play('hover');
+});
+
+/* ------------------------------------------------------------------ */
+/* Sounds — synthesised with Web Audio, no audio files.                */
+/* ------------------------------------------------------------------ */
+
+const Sound = (() => {
+  let ctx = null; let master = null; let lastHover = 0;
+  function ensure() {
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC(); master = ctx.createGain(); master.connect(ctx.destination);
+    }
+    if (ctx.state === 'suspended') ctx.resume();
+    master.gain.value = prefs.volume * 0.6;
+    return ctx;
+  }
+  // One enveloped oscillator note.
+  function tone(freq, { at = 0, dur = 0.08, type = 'sine', gain = 0.25, slide = 0, attack = 0.004 } = {}) {
+    const t0 = ctx.currentTime + at;
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t0);
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq * slide), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  // Short filtered noise, used for the "whoosh".
+  function noise({ dur = 0.18, gain = 0.12, from = 400, to = 2400 } = {}) {
+    const len = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate); const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(from, ctx.currentTime); f.frequency.exponentialRampToValueAtTime(to, ctx.currentTime + dur);
+    const g = ctx.createGain(); g.gain.value = gain;
+    src.connect(f); f.connect(g); g.connect(master); src.start();
+  }
+  const lazer = () => prefs.theme === 'lazer';
+  const SOUNDS = {
+    tick: () => tone(lazer() ? 1500 : 1180, { dur: 0.05, type: 'triangle', gain: 0.18, slide: 0.7 }),
+    nav: () => { tone(880, { dur: 0.06, type: 'triangle', gain: 0.14 }); tone(1320, { at: 0.035, dur: 0.07, type: 'sine', gain: 0.1 }); },
+    hover: () => tone(lazer() ? 2400 : 2000, { dur: 0.025, type: 'sine', gain: 0.035 }),
+    confirm: () => { tone(660, { dur: 0.07, type: 'triangle', gain: 0.2 }); tone(990, { at: 0.05, dur: 0.12, type: 'sine', gain: 0.16 }); },
+    on: () => { tone(740, { dur: 0.05, type: 'sine', gain: 0.16 }); tone(1110, { at: 0.04, dur: 0.07, type: 'sine', gain: 0.14 }); },
+    off: () => { tone(1110, { dur: 0.05, type: 'sine', gain: 0.14 }); tone(740, { at: 0.04, dur: 0.07, type: 'sine', gain: 0.14 }); },
+    success: () => [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, { at: i * 0.07, dur: 0.22, type: 'sine', gain: 0.14 })),
+    notify: () => { tone(988, { dur: 0.12, gain: 0.12 }); tone(1318.5, { at: 0.09, dur: 0.2, gain: 0.1 }); },
+    error: () => { tone(330, { dur: 0.14, type: 'square', gain: 0.06, slide: 0.8 }); tone(247, { at: 0.12, dur: 0.2, type: 'square', gain: 0.06, slide: 0.8 }); },
+    open: () => noise({ dur: 0.16, gain: 0.08 }),
+  };
+  return {
+    play(name, { force = false } = {}) {
+      if (!prefs.sound && !force) return;
+      if (name === 'hover') { const now = performance.now(); if (now - lastHover < 60) return; lastHover = now; }
+      try { if (ensure()) SOUNDS[name]?.(); } catch (_) {}
+    },
+  };
+})();
+
+/* ------------------------------------------------------------------ */
+/* Lazer background — drifting triangles, drawn on a canvas.           */
+/* ------------------------------------------------------------------ */
+
+const Triangles = (() => {
+  let raf = 0; let tris = []; let last = 0;
+  const cv = () => document.getElementById('triangles');
+  function seed(w, h) {
+    const n = Math.round((w * h) / 26000);
+    tris = Array.from({ length: n }, () => spawn(w, h, Math.random() * h));
+  }
+  function spawn(w, h, y = h + 60) {
+    const size = 24 + Math.random() * 110;
+    return { x: Math.random() * w, y, size, speed: 6 + (130 / size) * 4 * Math.random() + 4, shade: Math.random() };
+  }
+  function frame(now) {
+    const c = cv(); if (!c) return;
+    const dt = Math.min(0.05, (now - (last || now)) / 1000); last = now;
+    const ctx = c.getContext('2d'); const dpr = window.devicePixelRatio || 1;
+    const w = innerWidth; const h = innerHeight;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ff66aa';
+    for (const tr of tris) {
+      tr.y -= tr.speed * dt;
+      if (tr.y + tr.size < -10) Object.assign(tr, spawn(w, h));
+      const sz = tr.size;
+      ctx.beginPath();
+      ctx.moveTo(tr.x, tr.y - sz * 0.58); ctx.lineTo(tr.x + sz / 2, tr.y + sz * 0.29); ctx.lineTo(tr.x - sz / 2, tr.y + sz * 0.29); ctx.closePath();
+      if (tr.shade > 0.7) { ctx.fillStyle = accent; ctx.globalAlpha = 0.05 + (tr.shade - 0.7) * 0.18; }
+      else { ctx.fillStyle = '#ffffff'; ctx.globalAlpha = 0.018 + tr.shade * 0.035; }
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    raf = requestAnimationFrame(frame);
+  }
+  function resize() {
+    const c = cv(); if (!c) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+    seed(innerWidth, innerHeight);
+  }
+  window.addEventListener('resize', () => { if (raf) resize(); });
+  return {
+    sync() {
+      const on = prefs.theme === 'lazer';
+      if (on && !raf) {
+        resize(); last = 0;
+        if (reducedMotion()) { frame(performance.now()); cancelAnimationFrame(raf); raf = -1; } else raf = requestAnimationFrame(frame);
+      } else if (!on && raf) {
+        if (raf > 0) cancelAnimationFrame(raf); raf = 0;
+        const c = cv(); c?.getContext('2d').clearRect(0, 0, c.width, c.height);
+      }
+    },
+  };
+})();
 
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */

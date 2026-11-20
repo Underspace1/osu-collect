@@ -41,6 +41,7 @@ use tracing::{info, warn};
 const INDEX_HTML: &str = include_str!("assets/index.html");
 const APP_CSS: &str = include_str!("assets/app.css");
 const APP_JS: &str = include_str!("assets/app.js");
+const ICONS_JS: &str = include_str!("assets/icons.js");
 const LOGO_SVG: &str = include_str!("assets/logo.svg");
 
 const DEFAULT_PORT: u16 = 7270;
@@ -133,6 +134,10 @@ pub async fn run(config: Config, args: WebArgs) -> Result<(), Box<dyn std::error
         .route(
             "/app.js",
             get(|| async { asset(APP_JS, "text/javascript") }),
+        )
+        .route(
+            "/icons.js",
+            get(|| async { asset(ICONS_JS, "text/javascript") }),
         )
         .route(
             "/logo.svg",

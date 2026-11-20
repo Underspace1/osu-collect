@@ -15,16 +15,26 @@
       const mode = p.theme || 'dark';
       const dark = mode === 'system' ? matchMedia('(prefers-color-scheme: dark)').matches : mode !== 'light';
       document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      if (mode === 'lazer') document.documentElement.dataset.skin = 'lazer';
       if (p.accent) document.documentElement.dataset.accent = p.accent;
       if (p.density) document.documentElement.dataset.density = p.density;
     } catch (_) {}
   </script>
 </head>
 <body>
+  <canvas id="triangles" aria-hidden="true"></canvas>
   <div class="app">
     <aside class="sidebar">
       <a class="brand" href="#/download">
-        <img src="/logo.svg" alt="" width="30" height="30">
+        <svg class="logo" viewBox="0 0 64 64" width="32" height="32" aria-hidden="true">
+          <defs><linearGradient id="lg-bg" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ff7ab6"/><stop offset=".55" stop-color="#ff4f9a"/><stop offset="1" stop-color="#9d5cff"/></linearGradient></defs>
+          <rect width="64" height="64" rx="18" fill="url(#lg-bg)"/>
+          <circle class="l-back" cx="18" cy="18" r="9" fill="none" stroke="#fff" stroke-opacity=".4" stroke-width="4"/>
+          <circle class="l-mid" cx="26" cy="26" r="9.5" fill="none" stroke="#fff" stroke-opacity=".65" stroke-width="4"/>
+          <circle class="l-approach" cx="35" cy="35" r="15" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="2"/>
+          <circle cx="35" cy="35" r="10" fill="#fff"/>
+          <circle class="l-core" cx="35" cy="35" r="4" fill="#ff4f9a"/>
+        </svg>
         <span>osu!<b>collect</b></span>
       </a>
       <nav class="nav" id="nav"></nav>
@@ -46,6 +56,7 @@
   </div>
   <div id="modal-root"></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/icons.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

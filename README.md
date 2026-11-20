@@ -49,9 +49,20 @@ Progress updates live in the **Downloads** page: overall progress, transfer spee
 <img src="media/web-downloads.png" alt="Downloads page with live per-map progress, speed and ETA" width="100%">
 </div>
 
-### Themes and languages
+### Lazer mode
 
-Dark, light or system theme, six accent colours, comfortable or compact spacing, and English or French. These are saved in your browser and apply instantly.
+A skin inspired by osu!lazer: deep purple translucent panels, slanted buttons, glowing progress bars, the Exo 2 font, and triangles slowly drifting up in the background. Pick **Lazer** under Settings → Appearance → Theme.
+
+<div align="center">
+<img src="media/web-lazer-collection.png" alt="Lazer mode: collection preview with drifting triangles and slanted buttons" width="49%">
+<img src="media/web-lazer-downloads.png" alt="Lazer mode: live downloads with glowing progress bars" width="49%">
+</div>
+
+### Themes, sounds and motion
+
+- **Themes:** dark, light, Lazer or follow the system, six accent colours, comfortable or compact spacing, English or French. Saved in your browser and applied instantly.
+- **Interface sounds:** short sounds when you click, flip a switch, open the folder picker, start a download or when one finishes or fails. They're generated in the browser (no audio files), and can be turned off or made quieter in Settings.
+- **Animations:** page transitions, cards that appear one after another, a hit-burst ring on button presses, counting stats, a closing approach circle on the logo when you hover it, and toasts that slide in. All of it is turned off if your system asks for reduced motion.
 
 <div align="center">
 <img src="media/web-settings-light.png" alt="Settings in the light theme with a blue accent" width="49%">
@@ -96,14 +107,14 @@ The binary is `target/release/osu-collect`. If you've already cloned without `--
 ## Settings
 
 <div align="center">
-<img src="media/web-settings.png" alt="Settings page: appearance, downloads, mirrors, osu! installation, advanced" width="100%">
+<img src="media/web-lazer-settings.png" alt="Settings page in Lazer mode: appearance, sounds, downloads, mirrors" width="100%">
 </div>
 
 The **Settings** page writes to the same `config.toml` as the terminal app, so changes made in one show up in the other.
 
 | Section | Options |
 | --- | --- |
-| Appearance | Theme, accent colour, spacing, language, whether to switch to Downloads when a download starts |
+| Appearance | Theme (dark / light / Lazer / system), accent colour, spacing, language, interface sounds and volume, whether to switch to Downloads when a download starts |
 | Downloads | Default folder, number of parallel downloads (automatic by default), include videos, skip maps you already have |
 | Mirrors | Enable or disable each mirror, change the order (drag or arrows), add custom mirrors (`https://example.com/d/{id}`) |
 | osu! installation | stable or lazer, install folder (detected automatically) |
@@ -123,5 +134,7 @@ The original terminal interface is still there: run `osu-collect` with no argume
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
+The web interface bundles a subset of [MingCute icons](https://www.mingcute.com) (Apache-2.0).
 
 <sub>Beatmap covers and titles in the screenshots are placeholders generated for the documentation.</sub>
